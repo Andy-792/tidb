@@ -15,9 +15,10 @@ package executor
 
 import (
 	"context"
-
+	"fmt"
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/tidb/config"
+	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/kv"
 	plannercore "github.com/pingcap/tidb/planner/core"
 	"github.com/pingcap/tidb/sessionctx"
@@ -210,6 +211,12 @@ func (e *DeleteExec) removeRow(ctx sessionctx.Context, t table.Table, h kv.Handl
 	}
 	e.memTracker.Consume(int64(txnState.Size() - memUsageOfTxnState))
 	ctx.GetSessionVars().StmtCtx.AddAffectedRows(1)
+
+	if t.Meta().Name.L == "serverobject" {
+		fmt.Println("exec into delete---------------")
+		domain.GetDomain(e.ctx).NotifyUpdateS3server(e.ctx)
+	}
+
 	return nil
 }
 

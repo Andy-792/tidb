@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/pingcap/tidb/s3storage"
 	"strings"
 
 	"github.com/pingcap/errors"
@@ -244,6 +245,16 @@ func (e *DDLExec) executeTruncateTable(s *ast.TruncateTableStmt) error {
 		return e.executeTruncateLocalTemporaryTable(s)
 	}
 	err := domain.GetDomain(e.ctx).DDL().TruncateTable(e.ctx, ident)
+	if err == nil && s.Table.TableInfo.S3opt != "" {
+		if s3storage.RemoveDataIfStoreInS3(e.ctx, s.Table.TableInfo.S3opt, s.Table.Schema.L, s.Table.Name.L, false) {
+			return nil
+		}
+	}
+	if s.Table.Schema.L == "mysql" && s.Table.Name.L == "serverobject" {
+		fmt.Println("exec into truncate---------------")
+		//dom := domain.GetDomain(e.ctx)
+		domain.GetDomain(e.ctx).NotifyUpdateS3server(e.ctx)
+	}
 	return err
 }
 
@@ -277,6 +288,9 @@ func (e *DDLExec) executeTruncateLocalTemporaryTable(s *ast.TruncateTableStmt) e
 func (e *DDLExec) executeRenameTable(s *ast.RenameTableStmt) error {
 	isAlterTable := false
 	var err error
+	if s.TableToTables[0].OldTable.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("RENAME TABLE")
+	}
 	if len(s.TableToTables) == 1 {
 		oldIdent := ast.Ident{Schema: s.TableToTables[0].OldTable.Schema, Name: s.TableToTables[0].OldTable.Name}
 		if _, ok := e.getLocalTemporaryTable(oldIdent.Schema, oldIdent.Name); ok {
@@ -420,6 +434,9 @@ func (e *DDLExec) executeCreateView(s *ast.CreateViewStmt) error {
 
 func (e *DDLExec) executeCreateIndex(s *ast.CreateIndexStmt) error {
 	ident := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
+	if s.Table.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("CREATE INDEX")
+	}
 	if _, ok := e.getLocalTemporaryTable(ident.Schema, ident.Name); ok {
 		return ddl.ErrUnsupportedLocalTempTableDDL.GenWithStackByArgs("CREATE INDEX")
 	}
@@ -437,6 +454,8 @@ func (e *DDLExec) executeDropDatabase(s *ast.DropDatabaseStmt) error {
 	if dbName.L == "mysql" {
 		return errors.New("Drop 'mysql' database is forbidden")
 	}
+
+	tableInfos := e.is.SchemaTables(dbName)
 
 	err := domain.GetDomain(e.ctx).DDL().DropSchema(e.ctx, dbName)
 	if infoschema.ErrDatabaseNotExists.Equal(err) {
@@ -458,6 +477,13 @@ func (e *DDLExec) executeDropDatabase(s *ast.DropDatabaseStmt) error {
 			return err
 		}
 	}
+
+	var s3opts []string
+	for _, t := range tableInfos {
+		s3opts = append(s3opts, t.Meta().S3opt)
+	}
+	s3storage.RemoveObjectsForDB(e.ctx, s3opts, dbName.L)
+
 	return err
 }
 
@@ -496,6 +522,11 @@ func (e *DDLExec) executeDropView(s *ast.DropTableStmt) error {
 }
 
 func (e *DDLExec) executeDropSequence(s *ast.DropSequenceStmt) error {
+	for _, tb := range s.Sequences {
+		if tb.TableInfo.S3opt != "" {
+			return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("DROP SEQUENCE")
+		}
+	}
 	return e.dropTableObject(s.Sequences, sequenceObject, s.IfExists)
 }
 
@@ -547,7 +578,13 @@ func (e *DDLExec) dropTableObject(objects []*ast.TableName, obt objectType, ifEx
 		}
 		switch obt {
 		case tableObject:
+			dbname:= tn.Schema.L
+			tablename:= tn.Name.L
+
 			err = domain.GetDomain(e.ctx).DDL().DropTable(e.ctx, fullti)
+			if err == nil {
+				s3storage.RemoveDataIfStoreInS3(e.ctx, tableInfo.Meta().S3opt, dbname, tablename, true)
+			}
 		case viewObject:
 			err = domain.GetDomain(e.ctx).DDL().DropView(e.ctx, fullti)
 		case sequenceObject:
@@ -602,6 +639,9 @@ func (e *DDLExec) dropLocalTemporaryTables(localTempTables []*ast.TableName) err
 
 func (e *DDLExec) executeDropIndex(s *ast.DropIndexStmt) error {
 	ti := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
+	if s.Table.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("DROP INDEX")
+	}
 	if _, ok := e.getLocalTemporaryTable(ti.Schema, ti.Name); ok {
 		return ddl.ErrUnsupportedLocalTempTableDDL.GenWithStackByArgs("DROP INDEX")
 	}
@@ -615,6 +655,9 @@ func (e *DDLExec) executeDropIndex(s *ast.DropIndexStmt) error {
 
 func (e *DDLExec) executeAlterTable(ctx context.Context, s *ast.AlterTableStmt) error {
 	ti := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
+	if s.Table.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("ALTER TABLE")
+	}
 	if _, ok := e.getLocalTemporaryTable(ti.Schema, ti.Name); ok {
 		return ddl.ErrUnsupportedLocalTempTableDDL.GenWithStackByArgs("ALTER TABLE")
 	}
@@ -633,6 +676,11 @@ func (e *DDLExec) executeRecoverTable(s *ast.RecoverTableStmt) error {
 	}
 	t := meta.NewMeta(txn)
 	dom := domain.GetDomain(e.ctx)
+
+	if s.Table.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("RECOVER TABLE")
+	}
+
 	var job *model.Job
 	var tblInfo *model.TableInfo
 	if s.JobID != 0 {
@@ -815,6 +863,9 @@ func (e *DDLExec) getRecoverTableByTableName(tableName *ast.TableName) (*model.J
 }
 
 func (e *DDLExec) executeFlashbackTable(s *ast.FlashBackTableStmt) error {
+	if s.Table.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("FLASHBACK TABLE")
+	}
 	job, tblInfo, err := e.getRecoverTableByTableName(s.Table)
 	if err != nil {
 		return err
@@ -847,7 +898,11 @@ func (e *DDLExec) executeFlashbackTable(s *ast.FlashBackTableStmt) error {
 }
 
 func (e *DDLExec) executeLockTables(s *ast.LockTablesStmt) error {
+
 	for _, tb := range s.TableLocks {
+		if tb.Table.TableInfo.S3opt != "" {
+			return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("LOCK TABLES")
+		}
 		if _, ok := e.getLocalTemporaryTable(tb.Table.Schema, tb.Table.Name); ok {
 			return ddl.ErrUnsupportedLocalTempTableDDL.GenWithStackByArgs("LOCK TABLES")
 		}
@@ -869,6 +924,9 @@ func (e *DDLExec) executeUnlockTables(_ *ast.UnlockTablesStmt) error {
 
 func (e *DDLExec) executeCleanupTableLock(s *ast.CleanupTableLockStmt) error {
 	for _, tb := range s.Tables {
+		if tb.TableInfo.S3opt != "" {
+			return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("CLEANUP TABLE LOCK")
+		}
 		if _, ok := e.getLocalTemporaryTable(tb.Schema, tb.Name); ok {
 			return ddl.ErrUnsupportedLocalTempTableDDL.GenWithStackByArgs("ADMIN CLEANUP TABLE LOCK")
 		}
@@ -877,13 +935,22 @@ func (e *DDLExec) executeCleanupTableLock(s *ast.CleanupTableLockStmt) error {
 }
 
 func (e *DDLExec) executeRepairTable(s *ast.RepairTableStmt) error {
+	if s.Table.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("REPAIR TABLE")
+	}
 	return domain.GetDomain(e.ctx).DDL().RepairTable(e.ctx, s.Table, s.CreateStmt)
 }
 
 func (e *DDLExec) executeCreateSequence(s *ast.CreateSequenceStmt) error {
+	if s.Name.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("CREATE SEQUENCE")
+	}
 	return domain.GetDomain(e.ctx).DDL().CreateSequence(e.ctx, s)
 }
 
 func (e *DDLExec) executeAlterSequence(s *ast.AlterSequenceStmt) error {
+	if s.Name.TableInfo.S3opt != "" {
+		return ddl.ErrUnsupportedExecDDLForS3Table.GenWithStackByArgs("ALTER SEQUENCE")
+	}
 	return domain.GetDomain(e.ctx).DDL().AlterSequence(e.ctx, s)
 }

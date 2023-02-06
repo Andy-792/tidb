@@ -43,7 +43,6 @@ func (s *testExpressionRewriterSuite) TestIfNullEliminateColName(c *C) {
 	c.Assert(err, IsNil)
 	fields := rs.Fields()
 	c.Assert(fields[0].Column.Name.L, Equals, "ifnull(a,b)")
-	c.Assert(rs.Close(), IsNil)
 
 	tk.MustExec("drop table if exists t")
 	tk.MustExec("create table t(e int not null, b int)")

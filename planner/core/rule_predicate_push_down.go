@@ -14,7 +14,6 @@ package core
 
 import (
 	"context"
-
 	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/tidb/expression"
@@ -107,10 +106,157 @@ func (p *LogicalUnionScan) PredicatePushDown(predicates []expression.Expression)
 
 // PredicatePushDown implements LogicalPlan PredicatePushDown interface.
 func (ds *DataSource) PredicatePushDown(predicates []expression.Expression) ([]expression.Expression, LogicalPlan) {
+	//fmt.Printf("ds predicat push down is %s \n",ds.table.Meta().Name)
 	predicates = expression.PropagateConstant(ds.ctx, predicates)
 	predicates = DeleteTrueExprs(ds, predicates)
 	ds.allConds = predicates
 	ds.pushedDownConds, predicates = expression.PushDownExprs(ds.ctx.GetSessionVars().StmtCtx, predicates, ds.ctx.GetClient(), kv.UnSpecified)
+
+	//dom:=domain.GetDomain(ds.SCtx())
+	//if _,ok:=dom.S3server[ds.table.Meta().S3opt];ok{
+	//	var exprs string
+	//	for _, pushedDownCond := range ds.pushedDownConds {
+	//		fmt.Println("pushed down is ", pushedDownCond.String())
+	//		var expr string
+	//		switch ps := pushedDownCond.(type) {
+	//		case *expression.ScalarFunction:
+	//			var symbol string
+	//			switch ps.FuncName.L {
+	//			case ast.LT:
+	//				symbol = "<"
+	//			case ast.GT:
+	//				symbol = ">"
+	//			case ast.EQ:
+	//				symbol = "="
+	//			case ast.LE:
+	//				symbol = "<="
+	//			case ast.GE:
+	//				symbol = ">="
+	//			case ast.In:
+	//				var arg string
+	//				if s, ok := ps.GetArgs()[0].(*expression.ScalarFunction); ok {
+	//					switch s.FuncName.L {
+	//					case ast.Substring:
+	//						a := strings.Split(s.GetArgs()[0].String(), ".")[2]
+	//						arg = fmt.Sprintf("substring(%v, %v, %v)", a, s.GetArgs()[1], s.GetArgs()[2])
+	//					default:
+	//						continue
+	//					}
+	//				} else {
+	//					arg = strings.Split(ps.GetArgs()[0].String(), ".")[2]
+	//				}
+	//
+	//
+	//				sets := ps.GetArgs()[1:]
+	//				var maps string
+	//				tp := mysql.TypeString
+	//				for _, col := range ds.Columns {
+	//					if col.Name.L == arg {
+	//						tp = col.Tp
+	//						break
+	//					}
+	//				}
+	//				switch tp {
+	//				case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeBlob,
+	//					mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+	//					expr = "'%v'"
+	//				default:
+	//					expr = "%v"
+	//				}
+	//				for _, set := range sets {
+	//					if maps == "" {
+	//						maps = fmt.Sprintf(expr, set.String())
+	//					} else {
+	//						maps = maps + "," + fmt.Sprintf(expr, set.String())
+	//					}
+	//				}
+	//				symbol = fmt.Sprintf("%v in [%v]", arg, maps)
+	//			case ast.NE:
+	//				symbol = "!="
+	//			case ast.UnaryNot:
+	//				if s, ok := ps.GetArgs()[0].(*expression.ScalarFunction); ok {
+	//					switch s.FuncName.L {
+	//					case ast.In:
+	//						arg := strings.Split(s.GetArgs()[0].String(), ".")[2]
+	//						symbol = fmt.Sprintf("%v not in (%v)", arg, s.GetArgs()[1:])
+	//					case ast.Like:
+	//						arg := strings.Split(s.GetArgs()[0].String(), ".")[2]
+	//						symbol = fmt.Sprintf("%v not like '%v'", arg, s.GetArgs()[1:])
+	//					default:
+	//						continue
+	//					}
+	//				}
+	//			case ast.Like:
+	//				arg := strings.Split(ps.GetArgs()[0].String(), ".")[2]
+	//				l := len(ps.GetArgs())
+	//				symbol = fmt.Sprintf("%v like '%v'", arg, ps.GetArgs()[l-2].String())
+	//			default:
+	//				continue
+	//			}
+	//			args := ps.GetArgs()
+	//			arg := strings.Split(args[0].String(), ".")[2]
+	//			var tp byte
+	//			for _, col := range ds.Columns {
+	//				if col.Name.L == arg {
+	//					tp = col.Tp
+	//					break
+	//				}
+	//			}
+	//
+	//
+	//
+	//			if ps.FuncName.L != ast.In && ps.FuncName.L != ast.UnaryNot && ps.FuncName.L != ast.Like {
+	//				var value string
+	//				var valueIsColumn bool
+	//				switch p := args[1].(type) {
+	//				case *expression.Column:
+	//					//fmt.Println("column is ", p.OrigName)
+	//					value = strings.Split(p.OrigName, ".")[2]
+	//					valueIsColumn = true
+	//				default:
+	//					value = p.String()
+	//				}
+	//				switch tp {
+	//				case mysql.TypeDate:
+	//					if valueIsColumn {
+	//						expr = fmt.Sprintf(" %v %v %v", arg, symbol, value)
+	//					} else {
+	//						expr = fmt.Sprintf(" %v %v '%v'", arg, symbol, strings.Split(value, " ")[0])
+	//					}
+	//				case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeBlob,
+	//					mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+	//					if valueIsColumn {
+	//						expr = fmt.Sprintf(" %v %v %v", arg, symbol, value)
+	//					} else {
+	//						expr = fmt.Sprintf(" %v %v '%v'", arg, symbol, value)
+	//					}
+	//				default:
+	//					expr = fmt.Sprintf(" %v %v %v ", arg, symbol, value)
+	//				}
+	//			} else {
+	//				expr = symbol
+	//			}
+	//
+	//		default:
+	//			continue
+	//		}
+	//		if exprs == "" {
+	//			exprs = expr
+	//		} else {
+	//			if strings.Contains(expr, "in [") {
+	//				exprs = fmt.Sprintf("%v and %v", exprs, expr)
+	//			} else {
+	//				exprs = fmt.Sprintf("%v and %v", expr, exprs)
+	//			}
+	//		}
+	//	}
+	//	if exprs != "" {
+	//		s3info := variable.S3QueryInfo{S3query: map[string]string{"where": exprs}}
+	//		idx := fmt.Sprintf("%s.%s", ds.DBName.L, ds.tableInfo.Name.L)
+	//		ds.SCtx().GetSessionVars().S3querys[idx] = s3info
+	//	}
+	//}
+
 	return predicates, ds
 }
 
@@ -407,6 +553,7 @@ func (la *LogicalAggregation) PredicatePushDown(predicates []expression.Expressi
 		exprsOriginal = append(exprsOriginal, fun.Args[0])
 	}
 	groupByColumns := expression.NewSchema(la.GetGroupByCols()...)
+
 	for _, cond := range predicates {
 		switch cond.(type) {
 		case *expression.Constant:

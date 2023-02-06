@@ -182,6 +182,22 @@ const (
 		UNIQUE INDEX tbl(table_id)
 	);`
 
+
+	CreateS3ForTable = `CREATE TABLE IF NOT EXISTS mysql.serverobject (
+        name        VARCHAR(255)  NOT NULL,
+		host		VARCHAR(255)  NOT NULL,
+        accessid        VARCHAR(255)  NOT NULL,
+       accesss3key VARCHAR(255)  NOT NULL,
+      bucketfors3 VARCHAR(255)  NOT NULL,
+        UNIQUE INDEX tbl(name)
+	);`
+
+	CreateS3HostForTable = `CREATE TABLE IF NOT EXISTS mysql.serverhost (
+        name        VARCHAR(255)  NOT NULL,
+		host		VARCHAR(255)  NOT NULL,
+	);`
+
+
 	// CreateStatsColsTable stores the statistics of table columns.
 	CreateStatsColsTable = `CREATE TABLE IF NOT EXISTS mysql.stats_histograms (
 		table_id 			BIGINT(64) NOT NULL,
@@ -254,7 +270,7 @@ const (
 		charset TEXT NOT NULL,
 		collation TEXT NOT NULL,
 		source VARCHAR(10) NOT NULL DEFAULT 'unknown',
-		INDEX sql_index(original_sql(700),default_db(68)) COMMENT "accelerate the speed when add global binding query",
+		INDEX sql_index(original_sql(1024),default_db(1024)) COMMENT "accelerate the speed when add global binding query",
 		INDEX time_index(update_time) COMMENT "accelerate the speed when querying with last update time"
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;`
 
@@ -1556,6 +1572,7 @@ func getBootstrapVersion(s Session) (int64, error) {
 
 // doDDLWorks executes DDL statements in bootstrap stage.
 func doDDLWorks(s Session) {
+
 	// Create a test database.
 	mustExecute(s, "CREATE DATABASE IF NOT EXISTS test")
 	// Create system db.
@@ -1565,6 +1582,7 @@ func doDDLWorks(s Session) {
 	// Create privilege tables.
 	mustExecute(s, CreateGlobalPrivTable)
 	mustExecute(s, CreateDBPrivTable)
+
 	mustExecute(s, CreateTablePrivTable)
 	mustExecute(s, CreateColumnPrivTable)
 	// Create global system variable table.
@@ -1605,6 +1623,11 @@ func doDDLWorks(s Session) {
 	mustExecute(s, CreateStatsFMSketchTable)
 	// Create global_grants
 	mustExecute(s, CreateGlobalGrantsTable)
+
+
+	mustExecute(s,CreateS3ForTable)
+
+	mustExecute(s, CreateS3HostForTable)
 }
 
 // doDMLWorks executes DML statements in bootstrap stage.

@@ -38,7 +38,7 @@ import (
 	"net/http"
 
 	// For pprof
-	_ "net/http/pprof" // #nosec G108
+	_ "net/http/pprof"
 	"os"
 	"os/user"
 	"sync"

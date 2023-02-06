@@ -16,6 +16,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"github.com/pingcap/tidb/domain"
 	"runtime/trace"
 
 	"github.com/pingcap/parser/model"
@@ -305,6 +306,17 @@ func (e *UpdateExec) updateRows(ctx context.Context) (int, error) {
 		totalNumRows += chk.NumRows()
 		chk = chunk.Renew(chk, e.maxChunkSize)
 	}
+
+	for _, content := range e.tblColPosInfos {
+		tbl := e.tblID2table[content.TblID]
+		if tbl != nil && ( tbl.Meta().Name.L == "serverobject" || tbl.Meta().Name.L == "serverhost" ) {
+			fmt.Println("exec into update---------------")
+			//dom := domain.GetDomain(e.ctx)
+			domain.GetDomain(e.ctx).NotifyUpdateS3server(e.ctx)
+			//domain.BindDomain(e.ctx, dom)
+		}
+	}
+
 	return totalNumRows, nil
 }
 

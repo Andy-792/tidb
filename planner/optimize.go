@@ -135,6 +135,7 @@ func Optimize(ctx context.Context, sctx sessionctx.Context, node ast.Node, is in
 			if !useMaxTS(sctx, fp) {
 				sctx.PrepareTSFuture(ctx)
 			}
+
 			return fp, fp.OutputNames(), nil
 		}
 	}
@@ -211,13 +212,20 @@ func Optimize(ctx context.Context, sctx sessionctx.Context, node ast.Node, is in
 		// Restore the hint to avoid changing the stmt node.
 		hint.BindHint(stmtNode, originHints)
 	}
+
+
 	// No plan found from the bindings, or the bindings are ignored.
+
+
+
 	if bestPlan == nil {
+
 		sessVars.StmtCtx.StmtHints = originStmtHints
 		bestPlan, names, _, err = optimize(ctx, sctx, node, is)
 		if err != nil {
 			return nil, nil, err
 		}
+
 	}
 
 	// Add a baseline evolution task if:
@@ -363,6 +371,7 @@ func optimize(ctx context.Context, sctx sessionctx.Context, node ast.Node, is in
 
 	// Handle the execute statement.
 	if execPlan, ok := p.(*plannercore.Execute); ok {
+
 		err := execPlan.OptimizePreparedPlan(ctx, sctx, is)
 		return p, p.OutputNames(), 0, err
 	}
@@ -372,6 +381,8 @@ func optimize(ctx context.Context, sctx sessionctx.Context, node ast.Node, is in
 	// Handle the non-logical plan statement.
 	logic, isLogicalPlan := p.(plannercore.LogicalPlan)
 	if !isLogicalPlan {
+
+
 		return p, names, 0, nil
 	}
 
@@ -382,7 +393,11 @@ func optimize(ctx context.Context, sctx sessionctx.Context, node ast.Node, is in
 	}
 
 	beginOpt := time.Now()
+
 	finalPlan, cost, err := plannercore.DoOptimize(ctx, sctx, builder.GetOptFlag(), logic)
+
+
+
 	sctx.GetSessionVars().DurationOptimization = time.Since(beginOpt)
 	return finalPlan, names, cost, err
 }

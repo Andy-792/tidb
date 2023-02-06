@@ -17,9 +17,9 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/aes"
-	"crypto/md5" // #nosec G501
+	"crypto/md5"
 	"crypto/rand"
-	"crypto/sha1" // #nosec G505
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
@@ -624,7 +624,7 @@ func (b *builtinMD5Sig) evalString(row chunk.Row) (string, bool, error) {
 	if isNull || err != nil {
 		return "", isNull, err
 	}
-	sum := md5.Sum([]byte(arg)) // #nosec G401
+	sum := md5.Sum([]byte(arg))
 	hexStr := fmt.Sprintf("%x", sum)
 	return hexStr, false, nil
 }
@@ -666,7 +666,7 @@ func (b *builtinSHA1Sig) evalString(row chunk.Row) (string, bool, error) {
 	if isNull || err != nil {
 		return "", isNull, err
 	}
-	hasher := sha1.New() // #nosec G401
+	hasher := sha1.New()
 	_, err = hasher.Write([]byte(str))
 	if err != nil {
 		return "", true, err
@@ -766,7 +766,6 @@ func inflate(compressStr []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	/* #nosec G110 */
 	if _, err = io.Copy(&out, r); err != nil {
 		return nil, err
 	}

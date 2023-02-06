@@ -16,23 +16,22 @@ package autoid_test
 import (
 	"context"
 	"math"
-	"testing"
 
+	. "github.com/pingcap/check"
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/terror"
 	"github.com/pingcap/parser/types"
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/store/mockstore"
-	"github.com/stretchr/testify/require"
 )
 
-func TestInMemoryAlloc(t *testing.T) {
+func (*testSuite) TestInMemoryAlloc(c *C) {
 	store, err := mockstore.NewMockStore()
-	require.NoError(t, err)
+	c.Assert(err, IsNil)
 	defer func() {
 		err := store.Close()
-		require.NoError(t, err)
+		c.Assert(err, IsNil)
 	}()
 
 	columnInfo := &model.ColumnInfo{
@@ -44,64 +43,64 @@ func TestInMemoryAlloc(t *testing.T) {
 		Columns: []*model.ColumnInfo{columnInfo},
 	}
 	alloc := autoid.NewAllocatorFromTempTblInfo(tblInfo)
-	require.NotNil(t, alloc)
+	c.Assert(alloc, NotNil)
 
 	// alloc 1
 	ctx := context.Background()
 	_, id, err := alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(1), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(1))
 	_, id, err = alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(2), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(2))
 
 	// alloc N
 	_, id, err = alloc.Alloc(ctx, 1, 10, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(12), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(12))
 
 	// increment > N
 	_, id, err = alloc.Alloc(ctx, 1, 1, 10, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(21), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(21))
 
 	// offset
 	_, id, err = alloc.Alloc(ctx, 1, 1, 1, 30)
-	require.NoError(t, err)
-	require.Equal(t, int64(30), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(30))
 
 	// rebase
 	err = alloc.Rebase(1, int64(40), true)
-	require.NoError(t, err)
+	c.Assert(err, IsNil)
 	_, id, err = alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(41), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(41))
 	err = alloc.Rebase(1, int64(10), true)
-	require.NoError(t, err)
+	c.Assert(err, IsNil)
 	_, id, err = alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(42), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(42))
 
 	// maxInt64
 	err = alloc.Rebase(1, int64(math.MaxInt64-2), true)
-	require.NoError(t, err)
+	c.Assert(err, IsNil)
 	_, id, err = alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(math.MaxInt64-1), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(math.MaxInt64-1))
 	_, _, err = alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.True(t, terror.ErrorEqual(err, autoid.ErrAutoincReadFailed))
+	c.Assert(terror.ErrorEqual(err, autoid.ErrAutoincReadFailed), IsTrue)
 
 	// test unsigned
 	columnInfo.FieldType.Flag |= mysql.UnsignedFlag
 	alloc = autoid.NewAllocatorFromTempTblInfo(tblInfo)
-	require.NotNil(t, alloc)
+	c.Assert(alloc, NotNil)
 
 	var n uint64 = math.MaxUint64 - 2
 	err = alloc.Rebase(1, int64(n), true)
-	require.NoError(t, err)
+	c.Assert(err, IsNil)
 	_, id, err = alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, int64(n+1), id)
+	c.Assert(err, IsNil)
+	c.Assert(id, Equals, int64(n+1))
 	_, _, err = alloc.Alloc(ctx, 1, 1, 1, 1)
-	require.True(t, terror.ErrorEqual(err, autoid.ErrAutoincReadFailed))
+	c.Assert(terror.ErrorEqual(err, autoid.ErrAutoincReadFailed), IsTrue)
 }

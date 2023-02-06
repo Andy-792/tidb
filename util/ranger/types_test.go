@@ -15,16 +15,19 @@ package ranger_test
 
 import (
 	"math"
-	"testing"
 
+	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/ranger"
-	"github.com/stretchr/testify/require"
 )
 
-func TestRange(t *testing.T) {
-	t.Parallel()
+var _ = Suite(&testRangeSuite{})
+
+type testRangeSuite struct {
+}
+
+func (s *testRangeSuite) TestRange(c *C) {
 	simpleTests := []struct {
 		ran ranger.Range
 		str string
@@ -70,8 +73,8 @@ func TestRange(t *testing.T) {
 			str: "[-inf,1)",
 		},
 	}
-	for _, v := range simpleTests {
-		require.Equal(t, v.str, v.ran.String())
+	for _, t := range simpleTests {
+		c.Assert(t.ran.String(), Equals, t.str)
 	}
 
 	isPointTests := []struct {
@@ -124,13 +127,12 @@ func TestRange(t *testing.T) {
 		},
 	}
 	sc := new(stmtctx.StatementContext)
-	for _, v := range isPointTests {
-		require.Equal(t, v.isPoint, v.ran.IsPoint(sc))
+	for _, t := range isPointTests {
+		c.Assert(t.ran.IsPoint(sc), Equals, t.isPoint)
 	}
 }
 
-func TestIsFullRange(t *testing.T) {
-	t.Parallel()
+func (s *testRangeSuite) TestIsFullRange(c *C) {
 	nullDatum := types.MinNotNullDatum()
 	nullDatum.SetNull()
 	isFullRangeTests := []struct {
@@ -180,7 +182,7 @@ func TestIsFullRange(t *testing.T) {
 			isFullRange: true,
 		},
 	}
-	for _, v := range isFullRangeTests {
-		require.Equal(t, v.isFullRange, v.ran.IsFullRange())
+	for _, t := range isFullRangeTests {
+		c.Assert(t.ran.IsFullRange(), Equals, t.isFullRange)
 	}
 }

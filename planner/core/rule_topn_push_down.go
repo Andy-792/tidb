@@ -15,7 +15,6 @@ package core
 
 import (
 	"context"
-
 	"github.com/cznic/mathutil"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/planner/util"

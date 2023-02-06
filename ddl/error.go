@@ -294,4 +294,6 @@ var (
 	errFunctionalIndexOnJSONOrGeometryFunction = dbterror.ClassDDL.NewStd(mysql.ErrFunctionalIndexOnJSONOrGeometryFunction)
 	// errDependentByFunctionalIndex returns when the dropped column depends by expression index.
 	errDependentByFunctionalIndex = dbterror.ClassDDL.NewStd(mysql.ErrDependentByFunctionalIndex)
+
+	ErrUnsupportedExecDDLForS3Table = dbterror.ClassDDL.NewStdErr(mysql.ErrUnsupportedDDLOperation, parser_mysql.Message("Exec DDL method(%s) for S3 TABLE is currently unsupported", nil))
 )

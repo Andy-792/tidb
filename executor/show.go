@@ -212,8 +212,6 @@ func (e *ShowExec) fetchAll(ctx context.Context) error {
 		return e.fetchShowBRIE(ast.BRIEKindBackup)
 	case ast.ShowRestores:
 		return e.fetchShowBRIE(ast.BRIEKindRestore)
-	case ast.ShowPlacementLabels:
-		return e.fetchShowPlacementLabels(ctx)
 	}
 	return nil
 }

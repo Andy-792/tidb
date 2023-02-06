@@ -161,6 +161,7 @@ func DoOptimize(ctx context.Context, sctx sessionctx.Context, flag uint64, logic
 		planCounter = -1
 	}
 	physical, cost, err := physicalOptimize(logic, &planCounter)
+
 	if err != nil {
 		return nil, 0, err
 	}

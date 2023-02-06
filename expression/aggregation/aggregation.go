@@ -15,6 +15,7 @@ package aggregation
 
 import (
 	"bytes"
+	"github.com/pingcap/tidb/sessionctx"
 	"strings"
 
 	"github.com/pingcap/errors"
@@ -190,7 +191,7 @@ func IsAllFirstRow(aggFuncs []*AggFuncDesc) bool {
 }
 
 // CheckAggPushDown checks whether an agg function can be pushed to storage.
-func CheckAggPushDown(aggFunc *AggFuncDesc, storeType kv.StoreType) bool {
+func CheckAggPushDown(sctx sessionctx.Context, aggFunc *AggFuncDesc, storeType kv.StoreType, groupByItems []expression.Expression) bool {
 	if len(aggFunc.OrderByItems) > 0 {
 		return false
 	}
@@ -201,6 +202,25 @@ func CheckAggPushDown(aggFunc *AggFuncDesc, storeType kv.StoreType) bool {
 	switch storeType {
 	case kv.TiFlash:
 		ret = CheckAggPushFlash(aggFunc)
+	case kv.S3:
+		ret = CheckAggPushS3(aggFunc, groupByItems)
+		//if ret {
+		//	args := strings.Split(aggFunc.Args[0].String(), ".")
+		//	idx := args[0] + "." + args[1]
+		//	expr := aggFunc.Name + "(" + args[2] + ")"
+		//	var s3info variable.S3QueryInfo
+		//	var ok bool
+		//	s3info ,ok = sctx.GetSessionVars().S3querys[idx]
+		//	if ok {
+		//		agg := s3info.S3query["agg"]
+		//		if agg != "" {
+		//			s3info.S3query["agg"] = agg + ", " + expr
+		//		}
+		//	}  else {
+		//		s3info = variable.S3QueryInfo{S3query: map[string]string{"agg": expr}}
+		//	}
+		//	sctx.GetSessionVars().S3querys[idx] = s3info
+		//}
 	}
 	if ret {
 		ret = expression.IsPushDownEnabled(strings.ToLower(aggFunc.Name), storeType)
@@ -212,6 +232,17 @@ func CheckAggPushDown(aggFunc *AggFuncDesc, storeType kv.StoreType) bool {
 func CheckAggPushFlash(aggFunc *AggFuncDesc) bool {
 	switch aggFunc.Name {
 	case ast.AggFuncSum, ast.AggFuncCount, ast.AggFuncMin, ast.AggFuncMax, ast.AggFuncAvg, ast.AggFuncFirstRow, ast.AggFuncApproxCountDistinct:
+		return true
+	}
+	return false
+}
+
+func CheckAggPushS3(aggFunc *AggFuncDesc, groupByItems []expression.Expression) bool {
+	if len(groupByItems) > 0 {
+		return false
+	}
+	switch aggFunc.Name {
+	case ast.AggFuncSum, ast.AggFuncMin, ast.AggFuncMax, ast.AggFuncAvg, ast.AggFuncCount:
 		return true
 	}
 	return false

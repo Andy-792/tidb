@@ -15,10 +15,10 @@ package core
 
 import (
 	"context"
-
 	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/mysql"
+	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/expression/aggregation"
 	"github.com/pingcap/tidb/infoschema"
@@ -65,6 +65,9 @@ func exprHasSetVarOrSleep(expr expression.Expression) bool {
 func (p *LogicalProjection) PruneColumns(parentUsedCols []*expression.Column) error {
 	child := p.children[0]
 	used := expression.GetUsedList(parentUsedCols, p.schema)
+	//for i := 0; i < len(p.schema.Columns); i++ {
+	//	fmt.Println("col is ", p.schema.Columns[i], p.schema.Columns[i].String())
+	//}
 
 	for i := len(used) - 1; i >= 0; i-- {
 		if !used[i] && !exprHasSetVarOrSleep(p.Exprs[i]) {
@@ -243,6 +246,11 @@ func (p *LogicalUnionScan) PruneColumns(parentUsedCols []*expression.Column) err
 // PruneColumns implements LogicalPlan interface.
 func (ds *DataSource) PruneColumns(parentUsedCols []*expression.Column) error {
 	used := expression.GetUsedList(parentUsedCols, ds.schema)
+	var isS3Table bool
+	dom:=domain.GetDomain(ds.SCtx())
+	if _,ok:=dom.S3server[ds.table.Meta().S3opt];ok{
+		isS3Table = true
+	}
 
 	exprCols := expression.ExtractColumnsFromExpressions(nil, ds.allConds, nil)
 	exprUsed := expression.GetUsedList(exprCols, ds.schema)
@@ -250,6 +258,13 @@ func (ds *DataSource) PruneColumns(parentUsedCols []*expression.Column) error {
 	originSchemaColumns := ds.schema.Columns
 	originColumns := ds.Columns
 	for i := len(used) - 1; i >= 0; i-- {
+		if isS3Table {
+			if originSchemaColumns[i].ID == model.ExtraHandleID {
+				ds.schema.Columns = append(ds.schema.Columns[:i], ds.schema.Columns[i+1:]...)
+				ds.Columns = append(ds.Columns[:i], ds.Columns[i+1:]...)
+			}
+			continue
+		}
 		if !used[i] && !exprUsed[i] {
 			ds.schema.Columns = append(ds.schema.Columns[:i], ds.schema.Columns[i+1:]...)
 			ds.Columns = append(ds.Columns[:i], ds.Columns[i+1:]...)

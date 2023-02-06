@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,6 +69,7 @@ type Domain struct {
 	store                kv.Storage
 	infoCache            *infoschema.InfoCache
 	privHandle           *privileges.Handle
+	S3server             map[string]S3UserRecord
 	bindHandle           *bindinfo.BindHandle
 	statsHandle          unsafe.Pointer
 	statsLease           time.Duration
@@ -89,6 +91,14 @@ type Domain struct {
 	serverID             uint64
 	serverIDSession      *concurrency.Session
 	isLostConnectionToPD sync2.AtomicInt32 // !0: true, 0: false.
+}
+
+type S3UserRecord struct{
+	Name string
+	Host string
+	Accessid string
+	Accesss3key string
+	Bucketfors3 string
 }
 
 // loadInfoSchema loads infoschema at startTS.
@@ -637,6 +647,7 @@ func NewDomain(store kv.Storage, ddlLease time.Duration, statsLease time.Duratio
 	do := &Domain{
 		store:               store,
 		exit:                make(chan struct{}),
+		S3server:            make(map[string]S3UserRecord, 200),
 		sysSessionPool:      newSessionPool(capacity, factory),
 		statsLease:          statsLease,
 		infoCache:           infoschema.NewCache(16),
@@ -906,6 +917,94 @@ func (do *Domain) LoadPrivilegeLoop(ctx sessionctx.Context) error {
 	}()
 	return nil
 }
+
+//************
+
+func (do *Domain) LoadS3ServerLoop(ctx sessionctx.Context) error {
+	ctx.GetSessionVars().InRestrictedSQL = true
+	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.Background(), "set @@autocommit = 1")
+	if err != nil {
+		return err
+	}
+	err = do.Updates3server(ctx)
+	if err != nil {
+		return err
+	}
+
+	var watchCh clientv3.WatchChan
+	duration := 5 * time.Minute
+	if do.etcdClient != nil {
+		watchCh = do.etcdClient.Watch(context.Background(), s3serverKey)
+		duration = 10 * time.Minute
+	}
+
+
+	do.wg.Add(1)
+	go func() {
+		defer func() {
+			do.wg.Done()
+			logutil.BgLogger().Info("loadPrivilegeInLoop exited.")
+			util.Recover(metrics.LabelDomain, "loadPrivilegeInLoop", nil, false)
+		}()
+		var count int
+		for {
+			ok := true
+			select {
+			case <-do.exit:
+				return
+			case _, ok = <-watchCh:
+			case <-time.After(duration):
+			}
+			if !ok {
+				logutil.BgLogger().Error("load s3 server loop watch channel closed")
+				watchCh = do.etcdClient.Watch(context.Background(), s3serverKey)
+				count++
+				if count > 10 {
+					time.Sleep(time.Duration(count) * time.Second)
+				}
+				continue
+			}
+
+			count = 0
+			fmt.Println("update s3server---------")
+			err := do.Updates3server(ctx)
+			if err != nil {
+				logutil.BgLogger().Error("load se server failed", zap.Error(err))
+			}
+		}
+	}()
+	return nil
+}
+
+func (do *Domain) Updates3server(ctx sessionctx.Context) error{
+	time.Sleep(time.Second)
+
+	exec := ctx.(sqlexec.RestrictedSQLExecutor)
+	stmt, err := exec.ParseWithParams(context.TODO(), "select name,host,accessid,accesss3key,bucketfors3 from mysql.serverobject;")
+	if err != nil {
+		return err
+	}
+	rows, _, err := exec.ExecRestrictedStmt(context.TODO(), stmt)
+	if err != nil {
+		return err
+	}
+	do.S3server = make(map[string]S3UserRecord)
+	for _, row := range rows {
+
+		s3record:=S3UserRecord{}
+		s3record.Name = strings.ToLower(row.GetString(0))
+		s3record.Host = strings.ToLower(row.GetString(1))
+		s3record.Accessid=row.GetString(2)
+		s3record.Accesss3key=row.GetString(3)
+		s3record.Bucketfors3=row.GetString(4)
+		do.S3server[s3record.Name] = s3record
+	}
+	fmt.Println("s3server is ", do.S3server)
+	return nil
+
+}
+
+//******************
 
 // LoadSysVarCacheLoop create a goroutine loads sysvar cache in a loop,
 // it should be called only once in BootstrapSession.
@@ -1362,6 +1461,7 @@ func (do *Domain) ExpensiveQueryHandle() *expensivequery.Handle {
 
 const (
 	privilegeKey   = "/tidb/privilege"
+	s3serverKey   = "/tidb/s3server"
 	sysVarCacheKey = "/tidb/sysvars"
 )
 
@@ -1384,6 +1484,44 @@ func (do *Domain) NotifyUpdatePrivilege(ctx sessionctx.Context) {
 		}
 	}
 }
+
+
+// NotifyUpdatePrivilege updates privilege key in etcd, TiDB client that watches
+// the key will get notification.
+func (do *Domain) NotifyUpdateS3server(ctx sessionctx.Context) {
+	if do.etcdClient != nil {
+		row := do.etcdClient.KV
+		_, err := row.Put(context.Background(), s3serverKey, "")
+		if err != nil {
+			logutil.BgLogger().Warn("notify update s3 server failed", zap.Error(err))
+		}
+	}
+	// update locally
+	//exec := ctx.(sqlexec.RestrictedSQLExecutor)
+	//if stmt, err := exec.ParseWithParams(context.Background(), `select name,host,accessid,accesss3key,bucketfors3 from mysql.serverobject;`); err == nil {
+	//	rows, _, err := exec.ExecRestrictedStmt(context.Background(), stmt)
+	//	if err != nil {
+	//		logutil.BgLogger().Error("unable to s3server", zap.Error(err))
+	//	}
+	//	for _, row := range rows {
+	//
+	//		s3record:=S3UserRecord{}
+	//		s3record.Name = strings.ToLower(row.GetString(0))
+	//		s3record.Host = strings.ToLower(row.GetString(1))
+	//		s3record.Accessid=strings.ToLower(row.GetString(2))
+	//		s3record.Accesss3key=strings.ToLower(row.GetString(3))
+	//		s3record.Bucketfors3=strings.ToLower(row.GetString(4))
+	//		do.S3server[s3record.Name] = s3record
+	//	}
+	//}
+}
+
+
+
+
+
+
+
 
 // NotifyUpdateSysVarCache updates the sysvar cache key in etcd, which other TiDB
 // clients are subscribed to for updates. For the caller, the cache is also built
@@ -1511,7 +1649,7 @@ func (do *Domain) acquireServerID(ctx context.Context) error {
 	}
 
 	for {
-		randServerID := rand.Int63n(int64(util.MaxServerID)) + 1 // get a random serverID: [1, MaxServerID] #nosec G404
+		randServerID := rand.Int63n(int64(util.MaxServerID)) + 1 // get a random serverID: [1, MaxServerID]
 		key := fmt.Sprintf("%s/%v", serverIDEtcdPath, randServerID)
 		cmp := clientv3.Compare(clientv3.CreateRevision(key), "=", 0)
 		value := "0"

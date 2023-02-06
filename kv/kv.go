@@ -92,6 +92,8 @@ var (
 type RetrieverMutator interface {
 	Retriever
 	Mutator
+	// set allowed options of current operation in each TiKV disk usage level.
+	SetDiskFullOpt(level kvrpcpb.DiskFullOpt)
 }
 
 // MemBuffer is an in-memory kv collection, can be used to buffer write operations.
@@ -132,6 +134,9 @@ type MemBuffer interface {
 
 	// Len returns the number of entries in the DB.
 	Len() int
+
+	// set allowed options of current operation in each TiKV disk usage level.
+	SetDiskFullOpt(level kvrpcpb.DiskFullOpt)
 }
 
 // LockCtx contains information for LockKeys method.
@@ -230,6 +235,7 @@ const (
 	TiFlash
 	// TiDB means the type of a store is TiDB.
 	TiDB
+	S3
 	// UnSpecified means the store type is unknown
 	UnSpecified = 255
 )
@@ -242,6 +248,8 @@ func (t StoreType) Name() string {
 		return "tidb"
 	} else if t == TiKV {
 		return "tikv"
+	} else if t == S3 {
+		return "s3"
 	}
 	return "unspecified"
 }

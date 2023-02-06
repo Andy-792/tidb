@@ -1754,6 +1754,9 @@ func buildTableInfoWithStmt(ctx sessionctx.Context, s *ast.CreateTableStmt, dbCh
 	if err = handleTableOptions(s.Options, tbInfo); err != nil {
 		return nil, errors.Trace(err)
 	}
+	if s.S3Ops!=""{
+		tbInfo.S3opt=s.S3Ops
+	}
 	return tbInfo, nil
 }
 
@@ -1778,6 +1781,7 @@ func (d *ddl) assignPartitionIDs(defs []model.PartitionDefinition) error {
 }
 
 func (d *ddl) CreateTable(ctx sessionctx.Context, s *ast.CreateTableStmt) (err error) {
+	fmt.Printf("table name is %s,s3opt %s \n",s.Table.Name.String(),s.S3Ops)
 	ident := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
 	is := d.GetInfoSchemaWithInterceptor(ctx)
 	schema, ok := is.SchemaByName(ident.Schema)
@@ -2519,11 +2523,17 @@ func (d *ddl) AlterTable(ctx context.Context, sctx sessionctx.Context, ident ast
 			isAlterTable := true
 			err = d.RenameTable(sctx, ident, newIdent, isAlterTable)
 		case ast.AlterTableAlterPartition:
-			if sctx.GetSessionVars().EnableAlterPlacement {
-				err = d.AlterTableAlterPartition(sctx, ident, spec)
+			fmt.Println("spec s3ops is ", spec.S3Ops)
+			if spec.S3Ops != "" {
+				err = d.AlterTableAlterPartition(sctx, ident, spec, true)
 			} else {
-				err = errors.New("alter partition alter placement is experimental and it is switched off by tidb_enable_alter_placement")
+				if sctx.GetSessionVars().EnableAlterPlacement {
+					err = d.AlterTableAlterPartition(sctx, ident, spec, false)
+				} else {
+					err = errors.New("alter partition alter placement is experimental and it is switched off by tidb_enable_alter_placement")
+				}
 			}
+
 		case ast.AlterTablePartition:
 			// Prevent silent succeed if user executes ALTER TABLE x PARTITION BY ...
 			err = errors.New("alter table partition is unsupported")
@@ -4745,6 +4755,7 @@ func (d *ddl) TruncateTable(ctx sessionctx.Context, ti ast.Ident) error {
 	if tb.Meta().IsView() || tb.Meta().IsSequence() {
 		return infoschema.ErrTableNotExists.GenWithStackByArgs(schema.Name.O, tb.Meta().Name.O)
 	}
+
 	genIDs, err := d.genGlobalIDs(1)
 	if err != nil {
 		return errors.Trace(err)
@@ -5962,7 +5973,7 @@ func (d *ddl) AlterIndexVisibility(ctx sessionctx.Context, ident ast.Ident, inde
 	return errors.Trace(err)
 }
 
-func (d *ddl) AlterTableAlterPartition(ctx sessionctx.Context, ident ast.Ident, spec *ast.AlterTableSpec) (err error) {
+func (d *ddl) AlterTableAlterPartition(ctx sessionctx.Context, ident ast.Ident, spec *ast.AlterTableSpec, AlterS3 bool) (err error) {
 	schema, tb, err := d.getSchemaAndTableByIdent(ctx, ident)
 	if err != nil {
 		return errors.Trace(err)
@@ -5978,36 +5989,45 @@ func (d *ddl) AlterTableAlterPartition(ctx sessionctx.Context, ident ast.Ident, 
 		return errors.Trace(err)
 	}
 
-	bundle := infoschema.GetBundle(d.infoCache.GetLatest(), []int64{partitionID, meta.ID, schema.ID})
-
-	bundle.ID = placement.GroupID(partitionID)
-
-	err = bundle.ApplyPlacementSpec(spec.PlacementSpecs)
-	if err != nil {
-		var sb strings.Builder
-		sb.Reset()
-
-		restoreCtx := format.NewRestoreCtx(format.RestoreStringSingleQuotes|format.RestoreKeyWordLowercase|format.RestoreNameBackQuotes, &sb)
-
-		if e := spec.Restore(restoreCtx); e != nil {
-			return ErrInvalidPlacementSpec.GenWithStackByArgs("", err)
-		}
-		return ErrInvalidPlacementSpec.GenWithStackByArgs(sb.String(), err)
-	}
-
-	err = bundle.Tidy()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	bundle.Reset(partitionID)
-
-	if len(bundle.Rules) == 0 {
-		bundle.Index = 0
-		bundle.Override = false
+	bundle := &placement.Bundle{}
+	partition :=  &model.PartitionDefinition{}
+	if AlterS3 {
+		_, _, partition = d.infoCache.GetLatest().FindTableByPartitionID(partitionID)
+		partition.S3opt = spec.S3Ops
 	} else {
-		bundle.Index = placement.RuleIndexPartition
-		bundle.Override = true
+		bundle = infoschema.GetBundle(d.infoCache.GetLatest(), []int64{partitionID, meta.ID, schema.ID})
+
+		bundle.ID = placement.GroupID(partitionID)
+
+		err = bundle.ApplyPlacementSpec(spec.PlacementSpecs)
+		if err != nil {
+			var sb strings.Builder
+			sb.Reset()
+
+			restoreCtx := format.NewRestoreCtx(format.RestoreStringSingleQuotes|format.RestoreKeyWordLowercase|format.RestoreNameBackQuotes, &sb)
+
+			if e := spec.Restore(restoreCtx); e != nil {
+				return ErrInvalidPlacementSpec.GenWithStackByArgs("", err)
+			}
+			return ErrInvalidPlacementSpec.GenWithStackByArgs(sb.String(), err)
+		}
+
+		err = bundle.Tidy()
+		if err != nil {
+			return errors.Trace(err)
+		}
+		bundle.Reset(partitionID)
+
+		if len(bundle.Rules) == 0 {
+			bundle.Index = 0
+			bundle.Override = false
+		} else {
+			bundle.Index = placement.RuleIndexPartition
+			bundle.Override = true
+		}
 	}
+
+	fmt.Println("partition is ", partition)
 
 	job := &model.Job{
 		SchemaID:   schema.ID,
@@ -6015,7 +6035,7 @@ func (d *ddl) AlterTableAlterPartition(ctx sessionctx.Context, ident ast.Ident, 
 		SchemaName: schema.Name.L,
 		Type:       model.ActionAlterTableAlterPartition,
 		BinlogInfo: &model.HistoryInfo{},
-		Args:       []interface{}{partitionID, bundle},
+		Args:       []interface{}{partitionID, bundle, partition},
 	}
 
 	err = d.doDDLJob(ctx, job)
