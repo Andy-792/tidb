@@ -16,7 +16,7 @@ package executor
 import (
 	"archive/zip"
 	"context"
-	"crypto/md5" // #nosec G501
+	"crypto/md5"
 	"encoding/hex"
 	"fmt"
 	"math/rand"
@@ -155,7 +155,7 @@ func (e *PlanRecreatorSingleInfo) dumpSingle() (string, error) {
 		}
 	}
 	// Generate Token
-	token := md5.Sum([]byte(fmt.Sprintf("%s%d", fileName, rand.Int63()))) // #nosec G401 G404
+	token := md5.Sum([]byte(fmt.Sprintf("%s%d", fileName, rand.Int63())))
 	e.Ctx.Value(PlanRecreatorFileList).(fileList).FileInfo[fileName] = fileInfo{StartTime: startTime, Token: token}
 	e.Ctx.Value(PlanRecreatorFileList).(fileList).TokenMap[token] = fileName
 

@@ -16,6 +16,7 @@ package core
 import (
 	"bytes"
 	"fmt"
+	//"github.com/pingcap/tidb/domain"
 	"math"
 	"sort"
 
@@ -2232,12 +2233,19 @@ func (p *baseLogicalPlan) canPushToCopImpl(storeTp kv.StoreType, considerDual bo
 	for _, ch := range p.children {
 		switch c := ch.(type) {
 		case *DataSource:
+
 			validDs := false
 			for _, path := range c.possibleAccessPaths {
 				if path.StoreType == storeTp {
 					validDs = true
 				}
 			}
+
+
+
+
+
+
 			ret = ret && validDs
 
 			_, isTopN := p.self.(*LogicalTopN)

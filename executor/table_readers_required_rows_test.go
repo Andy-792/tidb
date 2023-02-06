@@ -90,6 +90,7 @@ func (r *requiredRowsSelectResult) genValue(valType *types.FieldType) interface{
 
 type totalRowsContextKey struct{}
 
+type ABC struct{}
 var totalRowsKey = totalRowsContextKey{}
 
 type expectedRowsRetContextKey struct{}

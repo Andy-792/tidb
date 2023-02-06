@@ -16,7 +16,9 @@ package ddl
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/pingcap/dumpling/v4/export"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +33,6 @@ import (
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/tidb/config"
-	"github.com/pingcap/tidb/ddl/label"
 	"github.com/pingcap/tidb/ddl/placement"
 	"github.com/pingcap/tidb/ddl/util"
 	"github.com/pingcap/tidb/domain/infosync"
@@ -53,6 +54,8 @@ import (
 	"github.com/pingcap/tidb/util/sqlexec"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 const (
@@ -525,7 +528,7 @@ func checkPartitionValuesIsInt(ctx sessionctx.Context, def *ast.PartitionDefinit
 		switch val.Kind() {
 		case types.KindUint64, types.KindNull:
 		case types.KindInt64:
-			if mysql.HasUnsignedFlag(tp.Flag) && val.GetInt64() < 0 {
+			if !ctx.GetSessionVars().SQLMode.HasNoUnsignedSubtractionMode() && mysql.HasUnsignedFlag(tp.Flag) && val.GetInt64() < 0 {
 				return ErrPartitionConstDomain.GenWithStackByArgs()
 			}
 		default:
@@ -667,7 +670,8 @@ func checkRangePartitionValue(ctx sessionctx.Context, tblInfo *model.TableInfo) 
 	if strings.EqualFold(defs[len(defs)-1].LessThan[0], partitionMaxValue) {
 		defs = defs[:len(defs)-1]
 	}
-	isUnsigned := isColUnsigned(cols, pi)
+	// treat partition value under NoUnsignedSubtractionMode as signed
+	isUnsigned := isColUnsigned(cols, pi) && !ctx.GetSessionVars().SQLMode.HasNoUnsignedSubtractionMode()
 	var prevRangeValue interface{}
 	for i := 0; i < len(defs); i++ {
 		if strings.EqualFold(defs[i].LessThan[0], partitionMaxValue) {
@@ -1496,17 +1500,6 @@ func getPartitionIDs(table *model.TableInfo) []int64 {
 	return physicalTableIDs
 }
 
-func getPartitionRuleIDs(dbName string, table *model.TableInfo) []string {
-	if table.GetPartitionInfo() == nil {
-		return []string{}
-	}
-	partRuleIDs := make([]string, 0, len(table.Partition.Definitions))
-	for _, def := range table.Partition.Definitions {
-		partRuleIDs = append(partRuleIDs, fmt.Sprintf(label.PartitionIDFormat, label.IDPrefix, dbName, table.Name.L, def.Name.L))
-	}
-	return partRuleIDs
-}
-
 // checkPartitioningKeysConstraints checks that the range partitioning key is included in the table constraint.
 func checkPartitioningKeysConstraints(sctx sessionctx.Context, s *ast.CreateTableStmt, tblInfo *model.TableInfo) error {
 	// Returns directly if there are no unique keys in the table.
@@ -1712,10 +1705,11 @@ func truncateTableByReassignPartitionIDs(t *meta.Meta, tblInfo *model.TableInfo)
 	return nil
 }
 
-func onAlterTableAlterPartition(t *meta.Meta, job *model.Job) (ver int64, err error) {
+func (w *worker) onAlterTableAlterPartition(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, err error) {
 	var partitionID int64
 	bundle := &placement.Bundle{}
-	err = job.DecodeArgs(&partitionID, bundle)
+	partition := &model.PartitionDefinition{}
+	err = job.DecodeArgs(&partitionID, bundle, partition)
 	if err != nil {
 		job.State = model.JobStateCancelled
 		return 0, errors.Trace(err)
@@ -1727,6 +1721,56 @@ func onAlterTableAlterPartition(t *meta.Meta, job *model.Job) (ver int64, err er
 	}
 
 	ptInfo := tblInfo.GetPartitionInfo()
+
+	//fmt.Println("partition s3opt is ", partition.S3opt, ptInfo.Columns, ptInfo.Expr, ptInfo.Num, ptInfo.Type)
+	if partition.S3opt != "" {
+		var gt string
+		for i, p := range ptInfo.Definitions {
+			if p.ID == partition.ID {
+				if i > 0 {
+					gt = fmt.Sprintf("%v >= %v", ptInfo.Expr, ptInfo.Definitions[i-1].LessThan[0])
+				}
+				lt := fmt.Sprintf("%v < %v", ptInfo.Expr, ptInfo.Definitions[i].LessThan[0])
+				var expr string
+				if gt == "" {
+					expr = lt
+				} else {
+					expr = fmt.Sprintf("%v and %v", gt, lt)
+				}
+				loadSql := fmt.Sprintf("SELECT * FROM %v WHERE %v ", tblInfo.Name.L, expr)
+				sctx, err := w.sessPool.get()
+				if err != nil {
+					fmt.Println("get sessionpool failed: ", err)
+					return 0, errors.Trace(err)
+				}
+				defer w.sessPool.put(sctx)
+				s := sctx.(sqlexec.SQLExecutor)
+				s3record := GetS3Info(s, partition.S3opt)
+				LoadPartitiondata(s3record, job.SchemaName, tblInfo.Name.L, partition.Name.L, loadSql)
+				now, err := getNowTSO(sctx)
+				if err != nil {
+					fmt.Println("get tso failed: ", err)
+					return 0, errors.Trace(err)
+				}
+				fmt.Println("success load partition data into s3, start delete partition data in tikv.")
+				startKey := tablecodec.EncodeTablePrefix(partitionID)
+				endKey := tablecodec.EncodeTablePrefix(partitionID + 1)
+				if err := doInsert(context.TODO(), s, job.ID, partitionID, startKey, endKey, now); err != nil {
+					return 0, errors.Trace(err)
+				}
+				ptInfo.AddingDefinitions = append(ptInfo.AddingDefinitions, ptInfo.Definitions[:i]...)
+				ptInfo.AddingDefinitions = append(ptInfo.AddingDefinitions, *partition)
+				ptInfo.AddingDefinitions = append(ptInfo.AddingDefinitions, ptInfo.Definitions[i+1:]...)
+				break
+			}
+		}
+		if len(ptInfo.AddingDefinitions) > 0 {
+			ptInfo.Definitions = ptInfo.AddingDefinitions
+			ptInfo.AddingDefinitions = nil
+		}
+		tblInfo.Partition = ptInfo
+	}
+
 	if ptInfo.GetNameByID(partitionID) == "" {
 		job.State = model.JobStateCancelled
 		return 0, errors.Trace(table.ErrUnknownPartition.GenWithStackByArgs("drop?", tblInfo.Name.O))
@@ -1755,8 +1799,94 @@ func onAlterTableAlterPartition(t *meta.Meta, job *model.Job) (ver int64, err er
 			return ver, errors.Trace(err)
 		}
 		job.FinishTableJob(model.JobStateDone, model.StatePublic, ver, tblInfo)
+
+		asyncNotifyEvent(d, &util.Event{Tp: model.ActionAlterTableAlterPartition, TableInfo: tblInfo, PartInfo: &model.PartitionInfo{Definitions: ptInfo.Definitions}})
+		physicalID := make([]int64, 1)
+		physicalID[0] = partitionID
+		job.Args = []interface{}{physicalID}
+		job.RawArgs, err = json.Marshal(job.Args)
+		if err != nil {
+			fmt.Println("marshal args failed: ", err)
+		}
+		job.Type = model.ActionTruncateTablePartition
+		ver, err = onTruncateTablePartition(d, t, job)
+		if err != nil {
+			fmt.Println("truncate partition table failed: ", err)
+			return ver, errors.Trace(err)
+		}
 	}
 	return ver, nil
+}
+
+func GetS3Info(s sqlexec.SQLExecutor, s3name string) S3UserRecord {
+	result, err := s.ExecuteInternal(context.TODO(), "SELECT name, host, accessid, accesss3key, bucketfors3 FROM mysql.serverobject")
+	if err != nil {
+		fmt.Println("ExecuteInternal failed: ", err)
+		return S3UserRecord{}
+	}
+	chk := result.NewChunk()
+	err = result.Next(context.TODO(), chk)
+	for i := 0; i < chk.NumRows(); i++ {
+		var s3record S3UserRecord
+		name := chk.GetRow(i).GetString(0)
+		if name == s3name {
+			s3record.Name = name
+			s3record.Host = chk.GetRow(i).GetString(1)
+			s3record.Accessid = chk.GetRow(i).GetString(2)
+			s3record.Accesss3key = chk.GetRow(i).GetString(3)
+			s3record.Bucketfors3 = chk.GetRow(i).GetString(4)
+			return s3record
+		}
+	}
+	return S3UserRecord{}
+}
+
+type S3UserRecord struct{
+	Name string
+	Host string
+	Accessid string
+	Accesss3key string
+	Bucketfors3 string
+}
+
+func LoadPartitiondata(s3opt S3UserRecord, database, tablename, partitionName, query string) error {
+	conf := export.DefaultConfig()
+
+	conf.Host="127.0.0.1"
+	conf.Port=4000
+	conf.User="root"
+	conf.FileType="csv"
+	conf.DBName=database
+	conf.BackendOptions.S3.Endpoint=s3opt.Host
+	conf.BackendOptions.S3.AccessKey=s3opt.Accessid
+	conf.BackendOptions.S3.SecretAccessKey=s3opt.Accesss3key
+	conf.BackendOptions.S3.ForcePathStyle=true
+	path:=fmt.Sprintf("s3://%s/%s/%s/%s",s3opt.Bucketfors3,database,tablename, partitionName)
+
+	conf.SQL=query
+	// conf.OutputFileTemplate="{{.DB}}.{{.Table}}.{{.Index}}"
+	tmpl, _ := export.ParseOutputFileTemplate("result.{{.Index}}")
+	conf.OutputFileTemplate=tmpl
+	conf.NoSchemas=true
+	conf.NoHeader=false
+	conf.OutputDirPath=path
+	//conf.Rows=1000000
+	conf.Threads = 128
+	conf.CsvSeparator="|"
+	conf.CsvDelimiter = "\""
+	conf.EscapeBackslash = false
+	conf.FileSize = 1 << 28
+	dumper, err := export.NewDumper(context.Background(), conf)
+	if err != nil {
+		return err
+	}
+	err = dumper.Dump()
+	dumper.Close()
+	if err != nil {
+		return err
+	}
+	dumper.L().Info("dump data successfully, dumpling will exit now")
+	return nil
 }
 
 type partitionExprProcessor func(sessionctx.Context, *model.TableInfo, ast.ExprNode) error

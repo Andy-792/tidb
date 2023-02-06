@@ -1158,6 +1158,9 @@ func (s *session) SetGlobalSysVar(name, value string) (err error) {
 	if value, err = sv.Validate(s.sessionVars, value, variable.ScopeGlobal); err != nil {
 		return err
 	}
+	if sv.Name == variable.TiDBEvolvePlanBaselines && value == "ON" && !config.CheckTableBeforeDrop {
+		return errors.Errorf("Cannot enable baseline evolution feature, it is not generally available now")
+	}
 	if err = sv.SetGlobalFromHook(s.sessionVars, value, false); err != nil {
 		return err
 	}
@@ -2646,6 +2649,16 @@ func BootstrapSession(store kv.Storage) (*domain.Domain, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	se8, err := createSession(store)
+	if err != nil {
+		return nil, err
+	}
+	err = dom.LoadS3ServerLoop(se8)
+	if err != nil {
+		return nil, err
+	}
+  fmt.Printf("s3 server is %v \n",dom.S3server)
 	if raw, ok := store.(kv.EtcdBackend); ok {
 		err = raw.StartGCWorker()
 		if err != nil {

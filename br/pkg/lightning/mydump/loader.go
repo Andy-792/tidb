@@ -36,14 +36,12 @@ type MDDatabaseMeta struct {
 }
 
 type MDTableMeta struct {
-	DB           string
-	Name         string
-	SchemaFile   FileInfo
-	DataFiles    []FileInfo
-	charSet      string
-	TotalSize    int64
-	IndexRatio   float64
-	IsRowOrdered bool
+	DB         string
+	Name       string
+	SchemaFile FileInfo
+	DataFiles  []FileInfo
+	charSet    string
+	TotalSize  int64
 }
 
 type SourceFileMeta struct {
@@ -428,13 +426,11 @@ func (s *mdLoaderSetup) insertTable(fileInfo FileInfo) (*MDTableMeta, bool, bool
 	}
 	s.tableIndexMap[fileInfo.TableName] = len(dbMeta.Tables)
 	ptr := &MDTableMeta{
-		DB:           fileInfo.TableName.Schema,
-		Name:         fileInfo.TableName.Name,
-		SchemaFile:   fileInfo,
-		DataFiles:    make([]FileInfo, 0, 16),
-		charSet:      s.loader.charSet,
-		IndexRatio:   0.0,
-		IsRowOrdered: true,
+		DB:         fileInfo.TableName.Schema,
+		Name:       fileInfo.TableName.Name,
+		SchemaFile: fileInfo,
+		DataFiles:  make([]FileInfo, 0, 16),
+		charSet:    s.loader.charSet,
 	}
 	dbMeta.Tables = append(dbMeta.Tables, ptr)
 	return ptr, dbExists, false
@@ -445,12 +441,10 @@ func (s *mdLoaderSetup) insertView(fileInfo FileInfo) (bool, bool) {
 	_, ok := s.tableIndexMap[fileInfo.TableName]
 	if ok {
 		meta := &MDTableMeta{
-			DB:           fileInfo.TableName.Schema,
-			Name:         fileInfo.TableName.Name,
-			SchemaFile:   fileInfo,
-			charSet:      s.loader.charSet,
-			IndexRatio:   0.0,
-			IsRowOrdered: true,
+			DB:         fileInfo.TableName.Schema,
+			Name:       fileInfo.TableName.Name,
+			SchemaFile: fileInfo,
+			charSet:    s.loader.charSet,
 		}
 		dbMeta.Views = append(dbMeta.Views, meta)
 	}

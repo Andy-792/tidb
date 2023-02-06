@@ -339,11 +339,6 @@ func (s *testSerialDBSuite) TestWriteReorgForColumnTypeChangeOnAmendTxn(c *C) {
 
 		var checkErr error
 		tk1 := testkit.NewTestKit(c, s.store)
-		defer func() {
-			if tk1.Se != nil {
-				tk1.Se.Close()
-			}
-		}()
 		hook := &ddl.TestDDLCallback{Do: s.dom}
 		times := 0
 		hook.OnJobUpdatedExported = func(job *model.Job) {

@@ -830,7 +830,7 @@ type Insert struct {
 	names4OnDuplicate  types.NameSlice
 
 	GenCols InsertGeneratedColumns
-
+	S3query     string
 	SelectPlan PhysicalPlan
 
 	IsReplace bool
@@ -1176,7 +1176,7 @@ func (e *Explain) explainPlanInRowFormat(p Plan, taskType, driverSide, indent st
 	case *PhysicalTableReader:
 		var storeType string
 		switch x.StoreType {
-		case kv.TiKV, kv.TiFlash, kv.TiDB:
+		case kv.TiKV, kv.TiFlash, kv.TiDB, kv.S3:
 			// expected do nothing
 		default:
 			return errors.Errorf("the store type %v is unknown", x.StoreType)

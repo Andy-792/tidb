@@ -1659,6 +1659,9 @@ func (ds *DataSource) convertToTableScan(prop *property.PhysicalProperty, candid
 		return invalidTask, nil
 	}
 	ts, cost, _ := ds.getOriginalPhysicalTableScan(prop, candidate.path, candidate.isMatchProp)
+/*	if ts.Table.Name.String()=="ossexample"{
+	fmt.Printf("get table phly is %s \n",ts.Table.Name)
+	}*/
 	if ts.KeepOrder && ts.Desc && ts.StoreType == kv.TiFlash {
 		return invalidTask, nil
 	}
@@ -1940,6 +1943,15 @@ func (ts *PhysicalTableScan) addPushedDownSelection(copTask *copTask, stats *pro
 }
 
 func (ds *DataSource) getOriginalPhysicalTableScan(prop *property.PhysicalProperty, path *util.AccessPath, isMatchProp bool) (*PhysicalTableScan, float64, float64) {
+	storeType := path.StoreType
+	if ds.tableInfo.S3opt != "" {
+		storeType = kv.S3
+	}
+	if ds.isPartition {
+		if ds.tableInfo.GetPartitionInfo().GetS3PartitionByID(ds.physicalTableID) != "" {
+			storeType = kv.S3
+		}
+	}
 	ts := PhysicalTableScan{
 		Table:           ds.tableInfo,
 		Columns:         ds.Columns,
@@ -1949,7 +1961,7 @@ func (ds *DataSource) getOriginalPhysicalTableScan(prop *property.PhysicalProper
 		physicalTableID: ds.physicalTableID,
 		Ranges:          path.Ranges,
 		AccessCondition: path.AccessConds,
-		StoreType:       path.StoreType,
+		StoreType:       storeType,
 		IsGlobalRead:    path.IsTiFlashGlobalRead,
 	}.Init(ds.ctx, ds.blockOffset)
 	ts.filterCondition = make([]expression.Expression, len(path.TableFilters))

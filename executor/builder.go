@@ -16,6 +16,11 @@ package executor
 import (
 	"bytes"
 	"context"
+	"fmt"
+
+	//"fmt"
+
+	//	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +38,7 @@ import (
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/tidb/distsql"
 	"github.com/pingcap/tidb/domain"
+	//"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/executor/aggfuncs"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/expression/aggregation"
@@ -41,6 +47,7 @@ import (
 	"github.com/pingcap/tidb/metrics"
 	plannercore "github.com/pingcap/tidb/planner/core"
 	plannerutil "github.com/pingcap/tidb/planner/util"
+	//"github.com/pingcap/tidb/s3storage"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/statistics"
@@ -836,9 +843,11 @@ func (b *executorBuilder) buildInsert(v *plannercore.Insert) Executor {
 	if v.IsReplace {
 		return b.buildReplace(ivs)
 	}
+	fmt.Printf("insert query is %s \n",v.S3query)
 	insert := &InsertExec{
 		InsertValues: ivs,
 		OnDuplicate:  append(v.OnDuplicate, v.GenCols.OnDuplicates...),
+		s3query: v.S3query,
 	}
 	return insert
 }
@@ -1574,7 +1583,6 @@ func (b *executorBuilder) buildMemTable(v *plannercore.PhysicalMemTable) Executo
 			strings.ToLower(infoschema.TableTiDBIndexes),
 			strings.ToLower(infoschema.TableViews),
 			strings.ToLower(infoschema.TableTables),
-			strings.ToLower(infoschema.TableReferConst),
 			strings.ToLower(infoschema.TableSequences),
 			strings.ToLower(infoschema.TablePartitions),
 			strings.ToLower(infoschema.TableEngines),
@@ -1602,8 +1610,7 @@ func (b *executorBuilder) buildMemTable(v *plannercore.PhysicalMemTable) Executo
 			strings.ToLower(infoschema.TablePlacementPolicy),
 			strings.ToLower(infoschema.TableClientErrorsSummaryGlobal),
 			strings.ToLower(infoschema.TableClientErrorsSummaryByUser),
-			strings.ToLower(infoschema.TableClientErrorsSummaryByHost),
-			strings.ToLower(infoschema.TableRegionLabel):
+			strings.ToLower(infoschema.TableClientErrorsSummaryByHost):
 			return &MemTableReaderExec{
 				baseExecutor: newBaseExecutor(b.ctx, v.Schema(), v.ID()),
 				table:        v.Table,

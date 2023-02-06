@@ -14,6 +14,7 @@
 package store
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -63,6 +64,7 @@ func newStoreWithRetry(path string, maxRetries int) (kv.Storage, error) {
 		return nil, errors.Errorf("invalid uri format, storage %s is not registered", name)
 	}
 
+	fmt.Printf("path is %s \n",path)
 	var s kv.Storage
 	err = util.RunWithRetry(maxRetries, util.RetryInterval, func() (bool, error) {
 		logutil.BgLogger().Info("new store", zap.String("path", path))

@@ -17,12 +17,13 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/pingcap/tidb/domain"
+	"github.com/pingcap/tidb/s3storage"
 	"runtime/trace"
 	"time"
 
-	"github.com/pingcap/parser/model"
-
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/kv"
@@ -43,7 +44,7 @@ type InsertExec struct {
 	evalBuffer4Dup chunk.MutRow
 	curInsertVals  chunk.MutRow
 	row4Update     []types.Datum
-
+    s3query      string
 	Priority mysql.PriorityEnum
 }
 
@@ -304,8 +305,30 @@ func (e *InsertExec) batchUpdateDupRows(ctx context.Context, newRows [][]types.D
 func (e *InsertExec) Next(ctx context.Context, req *chunk.Chunk) error {
 	req.Reset()
 	if len(e.children) > 0 && e.children[0] != nil {
+
+		dom:=domain.GetDomain(e.ctx)
+
+		if s3opt,ok:=dom.S3server[e.Table.Meta().S3opt];ok{
+			selectExec := e.insertCommon().children[0]
+			selectFields := retTypes(selectExec)
+			insertFields := e.Table.Cols()
+			if len(selectFields) != len(insertFields) {
+				return ErrWrongNumberOfColumnsInSelect.GenWithStackByArgs()
+			}
+			for i, field := range selectFields {
+				if !insertFields[i].Equal(field) {
+					return ErrWrongTypeColumnValue.GenWithStackByArgs()
+				}
+			}
+			fmt.Printf("database for s3 is %s,sql is %s \n",e.ctx.GetSessionVars().CurrentDB,e.s3query)
+				return s3storage.Loaddata(s3opt,e.ctx.GetSessionVars().CurrentDB,e.Table.Meta().Name.String(),e.s3query)
+		}
+
+
 		return insertRowsFromSelect(ctx, e)
 	}
+
+
 	return insertRows(ctx, e)
 }
 
@@ -324,6 +347,8 @@ func (e *InsertExec) Close() error {
 func (e *InsertExec) Open(ctx context.Context) error {
 	e.memTracker = memory.NewTracker(e.id, -1)
 	e.memTracker.AttachTo(e.ctx.GetSessionVars().StmtCtx.MemTracker)
+
+
 
 	if e.OnDuplicate != nil {
 		e.initEvalBuffer4Dup()

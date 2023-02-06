@@ -1123,6 +1123,8 @@ func canFuncBePushed(sf *ScalarFunction, storeType kv.StoreType) bool {
 		ret = scalarExprSupportedByTiKV(sf)
 	case kv.TiDB:
 		ret = scalarExprSupportedByTiDB(sf)
+	case kv.S3:
+		ret = scalarExprSupportedByS3(sf)
 	case kv.UnSpecified:
 		ret = scalarExprSupportedByTiDB(sf) || scalarExprSupportedByTiKV(sf) || scalarExprSupportedByFlash(sf)
 	}
@@ -1147,6 +1149,11 @@ func IsPushDownEnabled(name string, storeType kv.StoreType) bool {
 		mask := storeTypeMask(storeType)
 		return !(value&mask == mask)
 	}
+
+	//if data store in s3, not allow push down.
+	//if storeType == kv.S3 {
+	//	return false
+	//}
 
 	if storeType != kv.TiFlash && name == ast.AggFuncApproxCountDistinct {
 		// Can not push down approx_count_distinct to other store except tiflash by now.
@@ -1287,4 +1294,88 @@ func wrapWithIsTrue(ctx sessionctx.Context, keepNull bool, arg Expression, wrapF
 		sf.FuncName = model.NewCIStr(ast.IsTruthWithNull)
 	}
 	return FoldConstant(sf), nil
+}
+
+
+func scalarExprSupportedByS3(function *ScalarFunction) bool {
+	switch function.FuncName.L {
+	//case ast.Floor, ast.Ceil, ast.Ceiling:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_FloorIntToDec, tipb.ScalarFuncSig_CeilIntToDec:
+	//		return false
+	//	default:
+	//		return true
+	//	}
+	case
+		ast.LogicOr, ast.LogicAnd,
+		ast.GE, ast.LE, ast.EQ, ast.NE, ast.LT, ast.GT, ast.In, ast.IsNull, ast.Like,
+		ast.Plus, ast.Minus, ast.Div, ast.Mul, ast.Mod,
+		ast.Case,
+		ast.Date, ast.Year, ast.Month, ast.Day,
+		ast.DateDiff:
+
+		return true
+	//case ast.Substr, ast.Substring, ast.Left, ast.Right, ast.CharLength:
+	//	switch function.Function.PbCode() {
+	//	case
+	//		tipb.ScalarFuncSig_LeftUTF8,
+	//		tipb.ScalarFuncSig_RightUTF8,
+	//		tipb.ScalarFuncSig_CharLengthUTF8,
+	//		tipb.ScalarFuncSig_Substring2ArgsUTF8,
+	//		tipb.ScalarFuncSig_Substring3ArgsUTF8:
+	//		return true
+	//	}
+	//case ast.Cast:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_CastIntAsTime:
+	//		// ban the function of casting year type as time type pushing down to tiflash because of https://github.com/pingcap/tidb/issues/26215
+	//		return function.GetArgs()[0].GetType().Tp != mysql.TypeYear
+	//	case tipb.ScalarFuncSig_CastIntAsInt, tipb.ScalarFuncSig_CastIntAsReal, tipb.ScalarFuncSig_CastIntAsDecimal, tipb.ScalarFuncSig_CastIntAsString,
+	//		tipb.ScalarFuncSig_CastRealAsInt, tipb.ScalarFuncSig_CastRealAsReal, tipb.ScalarFuncSig_CastRealAsDecimal, tipb.ScalarFuncSig_CastRealAsString, tipb.ScalarFuncSig_CastRealAsTime,
+	//		tipb.ScalarFuncSig_CastStringAsInt, tipb.ScalarFuncSig_CastStringAsReal, tipb.ScalarFuncSig_CastStringAsDecimal, tipb.ScalarFuncSig_CastStringAsString, tipb.ScalarFuncSig_CastStringAsTime,
+	//		tipb.ScalarFuncSig_CastDecimalAsInt /*, tipb.ScalarFuncSig_CastDecimalAsReal*/, tipb.ScalarFuncSig_CastDecimalAsDecimal, tipb.ScalarFuncSig_CastDecimalAsString, tipb.ScalarFuncSig_CastDecimalAsTime,
+	//		tipb.ScalarFuncSig_CastTimeAsInt /*, tipb.ScalarFuncSig_CastTimeAsReal*/, tipb.ScalarFuncSig_CastTimeAsDecimal, tipb.ScalarFuncSig_CastTimeAsTime, tipb.ScalarFuncSig_CastTimeAsString:
+	//		return true
+	//	}
+	//case ast.DateAdd, ast.AddDate:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_AddDateDatetimeInt, tipb.ScalarFuncSig_AddDateStringInt, tipb.ScalarFuncSig_AddDateStringReal:
+	//		return true
+	//	}
+	//case ast.DateSub, ast.SubDate:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_SubDateDatetimeInt, tipb.ScalarFuncSig_SubDateStringInt:
+	//		return true
+	//	}
+	//case ast.UnixTimestamp:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_UnixTimestampInt, tipb.ScalarFuncSig_UnixTimestampDec:
+	//		return true
+	//	}
+	//case ast.Round:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_RoundInt, tipb.ScalarFuncSig_RoundReal:
+	//		return true
+	//	}
+	//case ast.Extract:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_ExtractDatetime:
+	//		return true
+	//	}
+	//case ast.Replace:
+	//	switch function.Function.PbCode() {
+	//	case tipb.ScalarFuncSig_Replace:
+	//		return true
+	//	}
+	//case ast.StrToDate:
+	//	switch function.Function.PbCode() {
+	//	case
+	//		tipb.ScalarFuncSig_StrToDateDate,
+	//		tipb.ScalarFuncSig_StrToDateDatetime:
+	//		return true
+	//	default:
+	//		return false
+	//	}
+	}
+	return false
 }

@@ -274,8 +274,7 @@ func insertJobIntoDeleteRangeTable(ctx context.Context, sctx sessionctx.Context,
 		// The startKey here is for compatibility with previous versions, old version did not endKey so don't have to deal with.
 		var startKey kv.Key
 		var physicalTableIDs []int64
-		var ruleIDs []string
-		if err := job.DecodeArgs(&startKey, &physicalTableIDs, &ruleIDs); err != nil {
+		if err := job.DecodeArgs(&startKey, &physicalTableIDs); err != nil {
 			return errors.Trace(err)
 		}
 		if len(physicalTableIDs) > 0 {

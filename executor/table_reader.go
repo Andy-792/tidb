@@ -15,7 +15,17 @@ package executor
 
 import (
 	"context"
+	"fmt"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/pingcap/parser/ast"
+	"github.com/pingcap/tidb/domain"
+	"github.com/pingcap/tidb/errno"
+	"github.com/pingcap/tidb/util/dbterror"
+	"github.com/pingcap/tipb/go-tipb"
+	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/parser/model"
@@ -33,7 +43,6 @@ import (
 	"github.com/pingcap/tidb/util/memory"
 	"github.com/pingcap/tidb/util/ranger"
 	"github.com/pingcap/tidb/util/stringutil"
-	"github.com/pingcap/tipb/go-tipb"
 )
 
 // make sure `TableReaderExecutor` implements `Executor`.
@@ -61,8 +70,12 @@ type kvRangeBuilder interface {
 // TableReaderExecutor sends DAG request and reads table data from kv layer.
 type TableReaderExecutor struct {
 	baseExecutor
-
-	table table.Table
+	objch     chan minio.ObjectInfo
+	rowChunk chan *chunk.Chunk
+	minclient *minio.Client
+	s3bucket  string
+	s3query   string
+	table     table.Table
 
 	// The source of key ranges varies from case to case.
 	// It may be calculated from PhysicalPlan by executorBuilder, or calculated from argument by dataBuilder;
@@ -133,6 +146,119 @@ func (e *TableReaderExecutor) Open(ctx context.Context) error {
 		span1 := span.Tracer().StartSpan("TableReaderExecutor.Open", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		ctx = opentracing.ContextWithSpan(ctx, span1)
+	}
+
+	if t2, ok := e.plans[0].(*plannercore.PhysicalTableScan); ok && t2.Table != nil {
+		dom := domain.GetDomain(e.ctx)
+
+
+		p, pid := t2.IsPartition()
+		//fmt.Println("table is ", t2.Table.Name, p, t2.ExplainInfo())
+		var pname string
+		var rec domain.S3UserRecord
+		var exist bool
+		if p {
+
+			//fmt.Println("partition is ", t2.Table.GetPartitionInfo().Definitions, "adding partition ", t2.Table.GetPartitionInfo().AddingDefinitions)
+			//if pname == "p0" {
+			//	t2.Table.Partition.Definitions[0].S3opt = "testspx"
+			//}
+			pname = t2.Table.GetPartitionInfo().GetNameByID(pid)
+			rec, exist = dom.S3server[t2.Table.GetPartitionInfo().GetS3PartitionByID(pid)]
+		} else {
+			rec, exist = dom.S3server[t2.Table.S3opt]
+		}
+
+		fmt.Println("t2 is ", t2.TP(), t2.ExplainInfo(), t2.Table.Name, "table is partion ", p, pname)
+		if exist {
+
+			useSSL := false
+
+			host := strings.TrimLeft(rec.Host, "http://")
+
+			// Initialize minio client object.
+			minioClient, err := minio.New(host, &minio.Options{
+				Creds:  credentials.NewStaticV4(rec.Accessid, rec.Accesss3key, ""),
+				Secure: useSSL,
+			})
+			if err != nil {
+				fmt.Println(err)
+			}
+			dbname := t2.DBName.L
+			if dbname == "" {
+				dbname = e.ctx.GetSessionVars().CurrentDB
+			}
+			tablename := t2.Table.Name.String()
+			e.s3bucket = rec.Bucketfors3
+
+			//idx := fmt.Sprintf("%s.%s", dbname, tablename)
+			//var s3finalquery string
+			//fmt.Println("s3query idx is ", idx, " s3query is ", e.ctx.GetSessionVars().S3querys[idx])
+			//if query, ok := e.ctx.GetSessionVars().S3querys[idx]; ok {
+			//	if agg, exist := query.S3query["agg"]; exist {
+			//		s3finalquery = "SELECT " + agg
+			//	} else {
+			//		s3finalquery = fmt.Sprintf("%s", "SELECT * ")
+			//	}
+			//
+			//	s3finalquery = fmt.Sprintf("%s FROM s3object", s3finalquery)
+			//
+			//	if pred, exist := query.S3query["where"]; exist {
+			//		s3finalquery = fmt.Sprintf("%s WHERE %s", s3finalquery, pred)
+			//	}
+			//
+			//	if limit, exist := query.S3query["limit"]; exist {
+			//		s3finalquery = fmt.Sprintf("%s %s", s3finalquery, limit)
+			//	}
+			//}
+			//ctx, cancel := context.WithCancel(context.TODO())
+
+			e.objch = make(chan minio.ObjectInfo, 1000)
+			//product object
+			go func() {
+				defer func() {
+					if err := recover(); err != nil && (err.(runtime.Error)).Error() == "send on closed channel" {
+						fmt.Println("send on closed channel")
+					} else {
+						close(e.objch)
+					}
+				}()
+
+				var pprex string
+				if p {
+					pprex = fmt.Sprintf("%s/%s/%s/result", dbname, tablename, pname)
+				} else {
+					pprex = fmt.Sprintf("%s/%s/result", dbname, tablename)
+				}
+				for objectCh := range minioClient.ListObjects(context.Background(), rec.Bucketfors3, minio.ListObjectsOptions{
+					Prefix:    pprex,
+					Recursive: true,
+				}) {
+					e.objch <- objectCh
+				}
+			}()
+
+
+			r := make(map[string]string)
+			res := GetS3query(e.tablePlan, r)
+
+			e.s3query = fmt.Sprintf("%v %v %v", res["select"], res["where"], res["limit"])
+
+			e.minclient = minioClient
+
+			e.selectResultHook = selectResultHook{s3SelectResult}
+			// product table row data
+ 			e.rowChunk = make(chan *chunk.Chunk,1024)
+
+		} else {
+			if t2.Table.S3opt != "" {
+				return dbterror.ClassDDL.NewStdErr(errno.ErrErrorOnRead, mysql.Message("s3options is not valid in mysql.serverobject", nil))
+			}
+		}
+
+		//	fmt.Printf("open table is %s \n",t2.Table.Name.String())
+		//	fmt.Printf("scan table is %s. \n",t2.Table.Name)
+		//	e.selectResultHook=selectResultHook{mockSelectResult}
 	}
 
 	e.memTracker = memory.NewTracker(e.id, -1)
@@ -289,6 +415,7 @@ func (e *TableReaderExecutor) buildResp(ctx context.Context, ranges []*ranger.Ra
 			if err != nil {
 				return nil, err
 			}
+
 			results = append(results, result)
 		}
 		return distsql.NewSerialSelectResults(results), nil
@@ -304,8 +431,29 @@ func (e *TableReaderExecutor) buildResp(ctx context.Context, ranges []*ranger.Ra
 	if err != nil {
 		return nil, err
 	}
+
+	if se, ok := result.(*s3RowsSelectResult); ok {
+		var fields []*types.FieldType
+		for idx, col := range e.schema.Columns {
+			if col.ID != model.ExtraHandleID {
+				fields = append(fields, e.retFieldTypes[idx])
+			}
+		}
+
+		//fmt.Println("plan is ", e.tablePlan.ExplainInfo())
+		se.objch = e.objch
+		se.retTypes = fields
+		se.minc = e.minclient
+		se.bucketName = e.s3bucket
+		se.s3query = e.s3query
+		se.rowChunk = e.rowChunk
+		go se.ProductChunk(ctx,e)
+		//fmt.Printf("len is %d,retype is %d \n",len(se.objch),len(se.retTypes))
+	}
+
 	return result, nil
 }
+
 
 func (e *TableReaderExecutor) buildKVReqSeparately(ctx context.Context, ranges []*ranger.Range) ([]*kv.Request, error) {
 	pids, kvRanges, err := e.kvRangeBuilder.buildKeyRangeSeparately(ranges)
@@ -453,4 +601,275 @@ func (tr *tableResultHandler) Close() error {
 	err := closeAll(tr.optionalResult, tr.result)
 	tr.optionalResult, tr.result = nil, nil
 	return err
+}
+
+func GetS3query(tablePlan plannercore.PhysicalPlan, result map[string]string) map[string]string {
+	switch plan := tablePlan.(type) {
+	case *plannercore.PhysicalSelection :
+		fmt.Println(plan.Conditions)
+		var exprs string
+		for _, pushedDownCond := range plan.Conditions {
+			fmt.Println("pushed down is ", pushedDownCond.String())
+			var expr string
+			switch ps := pushedDownCond.(type) {
+			case *expression.ScalarFunction:
+				var symbol string
+				switch ps.FuncName.L {
+				case ast.LT:
+					symbol = "<"
+				case ast.GT:
+					symbol = ">"
+				case ast.EQ:
+					symbol = "="
+				case ast.LE:
+					symbol = "<="
+				case ast.GE:
+					symbol = ">="
+				case ast.In:
+					var arg string
+					if s, ok := ps.GetArgs()[0].(*expression.ScalarFunction); ok {
+						switch s.FuncName.L {
+						case ast.Substring:
+							a := strings.Split(s.GetArgs()[0].String(), ".")[2]
+							arg = fmt.Sprintf("substring(%v, %v, %v)", a, s.GetArgs()[1], s.GetArgs()[2])
+						default:
+							continue
+						}
+					} else {
+						arg = strings.Split(ps.GetArgs()[0].String(), ".")[2]
+					}
+
+
+					sets := ps.GetArgs()[1:]
+					var maps string
+					tp := mysql.TypeString
+					//for _, col := range plan.Schema().Columns {
+					//	if col.OrigName == arg {
+					//		tp = col.RetType
+					//		break
+					//	}
+					//}
+					switch tp {
+					case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeBlob,
+						mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+						expr = "'%v'"
+					default:
+						expr = "%v"
+					}
+					for _, set := range sets {
+						if maps == "" {
+							maps = fmt.Sprintf(expr, set.String())
+						} else {
+							maps = maps + "," + fmt.Sprintf(expr, set.String())
+						}
+					}
+					symbol = fmt.Sprintf("%v in [%v]", arg, maps)
+				case ast.NE:
+					symbol = "!="
+				case ast.UnaryNot:
+					if s, ok := ps.GetArgs()[0].(*expression.ScalarFunction); ok {
+						switch s.FuncName.L {
+						case ast.In:
+							arg := strings.Split(s.GetArgs()[0].String(), ".")[2]
+							symbol = fmt.Sprintf("%v not in (%v)", arg, s.GetArgs()[1:])
+						case ast.Like:
+							arg := strings.Split(s.GetArgs()[0].String(), ".")[2]
+							symbol = fmt.Sprintf("%v not like '%v'", arg, s.GetArgs()[1:])
+						default:
+							continue
+						}
+					}
+				case ast.Like:
+					arg := strings.Split(ps.GetArgs()[0].String(), ".")[2]
+					l := len(ps.GetArgs())
+					symbol = fmt.Sprintf("%v like '%v'", arg, ps.GetArgs()[l-2].String())
+				case ast.LogicOr:
+					var larg, rarg string
+					if s, ok := ps.GetArgs()[0].(*expression.ScalarFunction); ok {
+						switch s.FuncName.L {
+						case ast.EQ:
+							a := strings.Split(s.GetArgs()[0].String(), ".")[2]
+							larg = fmt.Sprintf("%v = '%v'", a, s.GetArgs()[1])
+						default:
+							continue
+						}
+					} else {
+						larg = strings.Split(ps.GetArgs()[0].String(), ".")[2]
+					}
+					if s, ok := ps.GetArgs()[1].(*expression.ScalarFunction); ok {
+						switch s.FuncName.L {
+						case ast.EQ:
+							a := strings.Split(s.GetArgs()[0].String(), ".")[2]
+							rarg = fmt.Sprintf("%v = '%v'", a, s.GetArgs()[1])
+						default:
+							continue
+						}
+					} else {
+						rarg = strings.Split(ps.GetArgs()[0].String(), ".")[2]
+					}
+					symbol = fmt.Sprintf("( %v or %v )", larg, rarg)
+
+				default:
+					continue
+				}
+				args := ps.GetArgs()
+				arg := strings.Split(args[0].String(), ".")[2]
+				tp := args[0].GetType().Tp
+
+				if ps.FuncName.L != ast.In && ps.FuncName.L != ast.UnaryNot && ps.FuncName.L != ast.Like && ps.FuncName.L != ast.LogicOr {
+					var value string
+					var valueIsColumn bool
+					switch p := args[1].(type) {
+					case *expression.Column:
+						//fmt.Println("column is ", p.OrigName)
+						value = strings.Split(p.OrigName, ".")[2]
+						valueIsColumn = true
+					default:
+						value = p.String()
+					}
+					switch tp {
+					case mysql.TypeDate:
+						if valueIsColumn {
+							expr = fmt.Sprintf(" %v %v %v", arg, symbol, value)
+						} else {
+							expr = fmt.Sprintf(" %v %v '%v'", arg, symbol, strings.Split(value, " ")[0])
+						}
+					case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeBlob,
+						mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+						if valueIsColumn {
+							expr = fmt.Sprintf(" %v %v %v", arg, symbol, value)
+						} else {
+							expr = fmt.Sprintf(" %v %v '%v'", arg, symbol, value)
+						}
+					default:
+						expr = fmt.Sprintf(" %v %v %v ", arg, symbol, value)
+					}
+				} else {
+					expr = symbol
+				}
+
+			default:
+				continue
+			}
+			if exprs == "" {
+				exprs = expr
+			} else {
+				if strings.Contains(expr, "in [") {
+					exprs = fmt.Sprintf("%v and %v", exprs, expr)
+				} else {
+					exprs = fmt.Sprintf("%v and %v", expr, exprs)
+				}
+			}
+		}
+		result["where"] = fmt.Sprintf("WHERE %v", exprs)
+		return GetS3query(plan.Children()[0], result)
+	case *plannercore.PhysicalHashAgg:
+		var aggquery string
+		for _, agg := range plan.AggFuncs {
+			var expr string
+			fmt.Println("partial agg func is ", agg.Name, agg.Args, agg.Mode, agg.RetTp.String())
+			//fmt.Println("col is ", p.TP(), p.children, p.ctx, p.Schema(), p.OutputNames(), p.Stats(), p.ExplainNormalizedInfo())
+			if s, ok := agg.Args[0].(*expression.ScalarFunction); ok {
+				switch s.FuncName.L {
+				case ast.Mul:
+					var right string
+					left := strings.Split(s.GetArgs()[0].String(), ".")[2]
+					if r, ok := s.GetArgs()[1].(*expression.ScalarFunction); ok {
+						var l, ri string
+						if r.FuncName.L == ast.Minus {
+							if rleft, ok := r.GetArgs()[0].(*expression.Constant); ok {
+								l = rleft.String()
+							}
+							if rright, ok := r.GetArgs()[1].(*expression.Column); ok {
+								ri = strings.Split(rright.OrigName, ".")[2]
+							}
+							right = fmt.Sprintf("(%v - %v)", l, ri)
+						}
+					} else {
+						right = strings.Split(s.GetArgs()[1].String(), ".")[2]
+					}
+
+					expr = fmt.Sprintf("%v(%v * %v)", agg.Name, left, right)
+				}
+			} else {
+				args := strings.Split(agg.Args[0].String(), ".")
+				if agg.Name == ast.AggFuncCount && len(args) == 1 {
+					expr = fmt.Sprintf("COUNT(1)")
+				} else {
+					expr = agg.Name + "(" + args[2] + ")"
+				}
+
+			}
+
+			if aggquery == "" {
+				aggquery = expr
+			} else {
+				aggquery = fmt.Sprintf("%v, %v", aggquery, expr)
+			}
+
+		}
+		query := fmt.Sprintf("SELECT %v FROM s3object", aggquery)
+		result["select"] = query
+		return GetS3query(plan.Children()[0], result)
+	case *plannercore.PhysicalStreamAgg:
+		var aggquery string
+		for _, agg := range plan.AggFuncs {
+			var expr string
+			fmt.Println("partial agg func is ", agg.Name, agg.Args, agg.Mode, agg.RetTp.String())
+			//fmt.Println("col is ", p.TP(), p.children, p.ctx, p.Schema(), p.OutputNames(), p.Stats(), p.ExplainNormalizedInfo())
+			if s, ok := agg.Args[0].(*expression.ScalarFunction); ok {
+				switch s.FuncName.L {
+				case ast.Mul:
+					var right string
+					left := strings.Split(s.GetArgs()[0].String(), ".")[2]
+					if r, ok := s.GetArgs()[1].(*expression.ScalarFunction); ok {
+						var l, ri string
+						if r.FuncName.L == ast.Minus {
+							if rleft, ok := r.GetArgs()[0].(*expression.Constant); ok {
+								l = rleft.String()
+							}
+							if rright, ok := r.GetArgs()[1].(*expression.Column); ok {
+								ri = strings.Split(rright.OrigName, ".")[2]
+							}
+							right = fmt.Sprintf("(%v - %v)", l, ri)
+						}
+					} else {
+						right = strings.Split(s.GetArgs()[1].String(), ".")[2]
+					}
+
+					expr = fmt.Sprintf("%v(%v * %v)", agg.Name, left, right)
+				}
+			} else {
+				args := strings.Split(agg.Args[0].String(), ".")
+				if agg.Name == ast.AggFuncCount && len(args) == 1 {
+					expr = fmt.Sprintf("COUNT(1)")
+				} else {
+					expr = agg.Name + "(" + args[2] + ")"
+				}
+
+			}
+
+			if aggquery == "" {
+				aggquery = expr
+			} else {
+				aggquery = fmt.Sprintf("%v, %v", aggquery, expr)
+			}
+
+		}
+		query := fmt.Sprintf("SELECT %v FROM s3object", aggquery)
+		result["select"] = query
+		return GetS3query(plan.Children()[0], result)
+	case *plannercore.PhysicalLimit:
+		newcount := plan.Count + plan.Offset
+		limit := fmt.Sprintf("Limit %v", newcount)
+		result["limit"] = limit
+		return GetS3query(plan.Children()[0], result)
+	case *plannercore.PhysicalTableScan:
+		if _, ok := result["select"]; !ok {
+			result["select"] = "SELECT * FROM s3object "
+		}
+		return result
+	default:
+		return result
+	}
 }

@@ -2765,6 +2765,7 @@ func (b *PlanBuilder) resolveGeneratedColumns(ctx context.Context, columns []*ta
 }
 
 func (b *PlanBuilder) buildInsert(ctx context.Context, insert *ast.InsertStmt) (Plan, error) {
+
 	ts, ok := insert.Table.TableRefs.Left.(*ast.TableSource)
 	if !ok {
 		return nil, infoschema.ErrTableNotExists.GenWithStackByArgs()
@@ -3210,6 +3211,9 @@ func (b *PlanBuilder) buildSelectPlanOfInsert(ctx context.Context, insert *ast.I
 			}
 		}
 	}
+
+
+
 	selectPlan, err := b.Build(ctx, insert.Select)
 	if err != nil {
 		return err
@@ -3270,7 +3274,32 @@ func (b *PlanBuilder) buildSelectPlanOfInsert(ctx context.Context, insert *ast.I
 	insertPlan.Schema4OnDuplicate.Append(schema4NewRow.Columns...)
 	insertPlan.names4OnDuplicate = append(insertPlan.tableColNames.Shallow(), names[actualColLen:]...)
 	insertPlan.names4OnDuplicate = append(insertPlan.names4OnDuplicate, names4NewRow...)
+
+
+	dom:=domain.GetDomain(b.ctx)
+   fmt.Printf("dom is %s \n",dom.S3server)
+
+/*	dbName := model.NewCIStr(b.ctx.GetSessionVars().CurrentDB)
+    tableName:=insertPlan.Table.Meta().Name
+    //fmt.Printf("dbname is %s,table name is %s \n",dbName,tableName)
+	ta,_:=b.is.TableByName(dbName,tableName)
+
+ */
+	//fmt.Printf("table is %s,s3 is %s \n",ta.Meta().Name,ta.Meta().S3opt)
+	if _,ok:=dom.S3server[insertPlan.Table.Meta().S3opt];ok{
+		qu:=getquerysql(insert.Text())
+      insertPlan.S3query=qu
+	}
+
+
 	return nil
+}
+
+func getquerysql(insertsql string) string{
+	queryindex:=strings.Index(strings.ToLower(insertsql),"select")
+
+	query:=insertsql[queryindex:len(insertsql)]
+	return query
 }
 
 func (b *PlanBuilder) buildLoadData(ctx context.Context, ld *ast.LoadDataStmt) (Plan, error) {
@@ -4123,9 +4152,6 @@ func buildShowSchema(s *ast.ShowStmt, isView bool, isSequence bool) (schema *exp
 	case ast.ShowBackups, ast.ShowRestores:
 		names = []string{"Destination", "State", "Progress", "Queue_time", "Execution_time", "Finish_time", "Connection", "Message"}
 		ftypes = []byte{mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeDouble, mysql.TypeDatetime, mysql.TypeDatetime, mysql.TypeDatetime, mysql.TypeLonglong, mysql.TypeVarchar}
-	case ast.ShowPlacementLabels:
-		names = []string{"Key", "Values"}
-		ftypes = []byte{mysql.TypeVarchar, mysql.TypeJSON}
 	}
 
 	schema = expression.NewSchema(make([]*expression.Column, 0, len(names))...)

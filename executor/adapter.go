@@ -586,7 +586,6 @@ func (a *ExecStmt) handleNoDelayExecutor(ctx context.Context, e Executor) (sqlex
 			return nil, errors.New("can not execute write statement when 'tidb_low_resolution_tso' is set")
 		}
 	}
-
 	err = Next(ctx, e, newFirstChunk(e))
 	if err != nil {
 		return nil, err

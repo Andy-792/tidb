@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/pingcap/tidb/domain"
 	"math"
 	"sync"
 	"time"
@@ -279,6 +280,12 @@ func insertRows(ctx context.Context, base insertCommon) (err error) {
 		return err
 	}
 	memTracker.Consume(-memUsageOfRows)
+
+	if e.Table.Meta().Name.L == "serverobject" {
+		fmt.Println("exec into insert ---------------")
+		domain.GetDomain(e.ctx).NotifyUpdateS3server(e.ctx)
+	}
+
 	return nil
 }
 
@@ -490,6 +497,14 @@ func insertRowsFromSelect(ctx context.Context, base insertCommon) error {
 		memTracker.Consume(-memUsageOfExtraCols)
 		memTracker.Consume(-chkMemUsage)
 	}
+
+	if e.Table.Meta().Name.L == "serverobject" {
+		fmt.Println("exec into insert from---------------")
+		//dom := domain.GetDomain(e.ctx)
+		domain.GetDomain(e.ctx).NotifyUpdateS3server(e.ctx)
+		//domain.BindDomain(e.ctx, dom)
+	}
+
 	return nil
 }
 

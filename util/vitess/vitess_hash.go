@@ -15,7 +15,7 @@ package vitess
 
 import (
 	"crypto/cipher"
-	"crypto/des" // #nosec G502
+	"crypto/des"
 	"encoding/binary"
 
 	"github.com/pingcap/errors"
@@ -25,7 +25,7 @@ var nullKeyBlock cipher.Block
 
 func init() {
 	var err error
-	nullKeyBlock, err = des.NewCipher(make([]byte, 8)) // #nosec G401 G502
+	nullKeyBlock, err = des.NewCipher(make([]byte, 8))
 	if err != nil {
 		panic(errors.Trace(err))
 	}

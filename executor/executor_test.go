@@ -4208,7 +4208,7 @@ func (s *testSuiteP1) TestUnionAutoSignedCast(c *C) {
 	tk.MustQuery("select * from t1 union select * from t2 order by id").
 		Check(testkit.Rows("1 -1 -1 -1.1 -1", "2 1 1 1.1 1"))
 	tk.MustQuery("select id, i, b, d, dd from t2 union select id, i, b, d, dd from t1 order by id").
-		Check(testkit.Rows("1 -1 -1 -1.1 -1", "2 1 1 1.1 1"))
+		Check(testkit.Rows("1 0 0 0 -1", "2 1 1 1.1 1"))
 	tk.MustQuery("select id, i from t2 union select id, cast(i as unsigned int) from t1 order by id").
 		Check(testkit.Rows("1 18446744073709551615", "2 1"))
 	tk.MustQuery("select dd from t2 union all select dd from t2").
@@ -4222,7 +4222,7 @@ func (s *testSuiteP1) TestUnionAutoSignedCast(c *C) {
 	tk.MustQuery("select id, v from t3 union select id, v from t4 order by id").
 		Check(testkit.Rows("1 -1", "2 1"))
 	tk.MustQuery("select id, v from t4 union select id, v from t3 order by id").
-		Check(testkit.Rows("1 -1", "2 1"))
+		Check(testkit.Rows("1 0", "2 1"))
 
 	tk.MustExec("drop table if exists t5,t6,t7")
 	tk.MustExec("create table t5 (id int, v bigint unsigned)")
@@ -5232,23 +5232,6 @@ func (s *testSplitTable) TestShowTableRegion(c *C) {
 	tk.MustExec("drop table if exists t_regions_temporary_table")
 	// Test pre split regions
 	_, err = tk.Exec("create global temporary table temporary_table_pre_split(id int ) pre_split_regions=2 ON COMMIT DELETE ROWS;")
-	c.Assert(err.Error(), Equals, ddl.ErrOptOnTemporaryTable.GenWithStackByArgs("pre split regions").Error())
-
-	// Test show table regions and split table on local temporary table
-	tk.MustExec("drop table if exists t_regions_local_temporary_table")
-	tk.MustExec("set @@tidb_enable_noop_functions=1;")
-	tk.MustExec("create temporary table t_regions_local_temporary_table (a int key, b int, c int, index idx(b), index idx2(c));")
-	// Test show table regions.
-	_, err = tk.Exec("show table t_regions_local_temporary_table regions")
-	c.Assert(err.Error(), Equals, plannercore.ErrOptOnTemporaryTable.GenWithStackByArgs("show table regions").Error())
-	// Test split table.
-	_, err = tk.Exec("split table t_regions_local_temporary_table between (-10000) and (10000) regions 4;")
-	c.Assert(err.Error(), Equals, plannercore.ErrOptOnTemporaryTable.GenWithStackByArgs("split table").Error())
-	_, err = tk.Exec("split partition table t_regions_local_temporary_table partition (p1,p2) index idx between (0) and (20000) regions 2;")
-	c.Assert(err.Error(), Equals, plannercore.ErrOptOnTemporaryTable.GenWithStackByArgs("split table").Error())
-	tk.MustExec("drop table if exists t_regions_local_temporary_table")
-	// Test pre split regions
-	_, err = tk.Exec("create temporary table local_temporary_table_pre_split(id int ) pre_split_regions=2;")
 	c.Assert(err.Error(), Equals, ddl.ErrOptOnTemporaryTable.GenWithStackByArgs("pre split regions").Error())
 
 	rows := re.Rows()

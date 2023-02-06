@@ -16,9 +16,9 @@ package expression
 import (
 	"bytes"
 	"crypto/aes"
-	"crypto/md5" // #nosec G501
+	"crypto/md5"
 	"crypto/rand"
-	"crypto/sha1" // #nosec G505
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
@@ -421,7 +421,7 @@ func (b *builtinMD5Sig) vecEvalString(input *chunk.Chunk, result *chunk.Column) 
 		return err
 	}
 	result.ReserveString(n)
-	digest := md5.New() // #nosec G401
+	digest := md5.New()
 	for i := 0; i < n; i++ {
 		if buf.IsNull(i) {
 			result.AppendNull()
@@ -714,7 +714,7 @@ func (b *builtinSHA1Sig) vecEvalString(input *chunk.Chunk, result *chunk.Column)
 		return err
 	}
 	result.ReserveString(n)
-	hasher := sha1.New() // #nosec G401
+	hasher := sha1.New()
 	for i := 0; i < n; i++ {
 		if buf.IsNull(i) {
 			result.AppendNull()

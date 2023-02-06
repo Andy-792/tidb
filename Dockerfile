@@ -25,26 +25,29 @@ RUN apk add --no-cache \
 RUN wget -O /usr/local/bin/dumb-init https://github.com/Yelp/dumb-init/releases/download/v1.2.2/dumb-init_1.2.2_amd64 \
  && chmod +x /usr/local/bin/dumb-init
 
-RUN mkdir -p /go/src/github.com/pingcap/tidb
-WORKDIR /go/src/github.com/pingcap/tidb
+#RUN mkdir -p /go/src/github.com/pingcap/tidb
+#WORKDIR /go/src/github.com/pingcap/tidb
 
 # Cache dependencies
-COPY go.mod .
-COPY go.sum .
+#COPY go.mod .
+#COPY go.sum .
 
-RUN GO111MODULE=on go mod download
+#RUN GO111MODULE=on go mod download
 
 # Build real binaries
-COPY . .
-RUN make
+#COPY . .
+#RUN make
 
 # Executable image
-FROM alpine
+FROM alpine:3.11.2
 
-RUN apk add --no-cache \
-    curl
+RUN apk add --no-cache
+#    curl
 
-COPY --from=builder /go/src/github.com/pingcap/tidb/bin/tidb-server /tidb-server
+RUN mkdir /lib64
+RUN ln -s /lib/libc.musl-x86_64.so.1 /lib64/ld-linux-x86-64.so.2
+
+COPY ./bin/tidb-server /tidb-server
 COPY --from=builder /usr/local/bin/dumb-init /usr/local/bin/dumb-init
 
 WORKDIR /

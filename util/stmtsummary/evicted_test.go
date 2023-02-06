@@ -26,11 +26,6 @@ import (
 	"github.com/pingcap/tidb/types"
 )
 
-var _ = Suite(&testStmtSummarySuite{})
-
-type testStmtSummarySuite struct {
-}
-
 // fake a stmtSummaryByDigest
 func newInduceSsbd(beginTime int64, endTime int64) *stmtSummaryByDigest {
 	newSsbd := &stmtSummaryByDigest{
@@ -90,7 +85,7 @@ func (s *testStmtSummarySuite) TestMapToEvictedCountDatum(c *C) {
 	}
 
 	// test stmtSummaryByDigestMap.toEvictedCountDatum
-	matchCheck(c, ssMap.ToEvictedCountDatum()[0], expectedEvictedCount...)
+	match(c, ssMap.ToEvictedCountDatum()[0], expectedEvictedCount...)
 
 	// test multiple intervals
 	ssMap.Clear()
@@ -139,7 +134,7 @@ func (s *testStmtSummarySuite) TestMapToEvictedCountDatum(c *C) {
 		types.NewTime(types.FromGoTime(time.Unix(n+interval, 0)), mysql.TypeTimestamp, types.DefaultFsp),
 		int64(1),
 	}
-	matchCheck(c, newlyEvicted, expectedEvictedCount...)
+	match(c, newlyEvicted, expectedEvictedCount...)
 }
 
 // Test stmtSummaryByDigestEvicted
@@ -290,7 +285,7 @@ func (s *testStmtSummarySuite) TestEvictedCountDetailed(c *C) {
 			types.NewTime(types.FromGoTime(time.Unix(n+60, 0)), mysql.TypeTimestamp, types.DefaultFsp),
 			int64(1),
 		}
-		matchCheck(c, evictedCountDatum, expectedDatum...)
+		match(c, evictedCountDatum, expectedDatum...)
 		n -= 60
 	}
 
@@ -304,7 +299,7 @@ func (s *testStmtSummarySuite) TestEvictedCountDetailed(c *C) {
 	}
 	ssMap.AddStatement(banditSei)
 	evictedCountDatums = ssMap.ToEvictedCountDatum()
-	matchCheck(c, evictedCountDatums[0], expectedDatum...)
+	match(c, evictedCountDatums[0], expectedDatum...)
 
 	ssMap.Clear()
 	other := ssMap.other
@@ -637,13 +632,4 @@ func getEvicted(ssbdee *stmtSummaryByDigestEvictedElement) string {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString(fmt.Sprintf("{begin: %v, end: %v, count: %v}", ssbdee.beginTime, ssbdee.endTime, len(ssbdee.digestKeyMap)))
 	return buf.String()
-}
-
-func matchCheck(c *C, row []types.Datum, expected ...interface{}) {
-	c.Assert(len(row), Equals, len(expected))
-	for i := range row {
-		got := fmt.Sprintf("%v", row[i].GetValue())
-		need := fmt.Sprintf("%v", expected[i])
-		c.Assert(got, Equals, need)
-	}
 }

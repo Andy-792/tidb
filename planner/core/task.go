@@ -14,8 +14,7 @@
 package core
 
 import (
-	"math"
-
+	"fmt"
 	"github.com/cznic/mathutil"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/ast"
@@ -35,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/util/collate"
 	"github.com/pingcap/tidb/util/plancodec"
 	"github.com/pingcap/tipb/go-tipb"
+	"math"
 )
 
 var (
@@ -1101,6 +1101,28 @@ func (p *PhysicalLimit) attach2Task(tasks ...task) task {
 		if (!cop.keepOrder || !cop.indexPlanFinished || cop.indexPlan == nil) && len(cop.rootTaskConds) == 0 {
 			// When limit is pushed down, we should remove its offset.
 			newCount := p.Offset + p.Count
+			//if cop.getStoreType() == kv.S3 {
+			//	var s3info variable.S3QueryInfo
+			//	if c, exist := cop.tablePlan.(*PhysicalTableScan); exist {
+			//		fmt.Println("cop ", c.DBName.L, c.Table.Name, c.Table.S3opt, c.filterCondition, c.AccessCondition)
+			//		idx := c.DBName.L + "." + c.Table.Name.L
+			//		s3info ,ok = p.ctx.GetSessionVars().S3querys[idx]
+			//		expr := fmt.Sprintf("Limit %v", newCount)
+			//		if ok {
+			//			s3info.S3query["limit"] = expr
+			//		}  else {
+			//			s3info = variable.S3QueryInfo{S3query: map[string]string{"limit": expr}}
+			//		}
+			//		fmt.Println("s3info is ", s3info)
+			//		p.ctx.GetSessionVars().S3querys[idx] = s3info
+			//		fmt.Println("s3info is ", s3info, " s3query is ", p.ctx.GetSessionVars().S3querys)
+			//	}
+			//	if c, exist := cop.tablePlan.(*PhysicalSelection); exist {
+			//		fmt.Println("condition is ", c.Conditions, c.TP(), c.ExplainInfo())
+			//	}
+			//
+			//
+			//}
 			childProfile := cop.plan().statsInfo()
 			// Strictly speaking, for the row count of stats, we should multiply newCount with "regionNum",
 			// but "regionNum" is unknown since the copTask can be a double read, so we ignore it now.
@@ -1198,6 +1220,9 @@ func (p *PhysicalTopN) canPushDown(storeTp kv.StoreType) bool {
 	exprs := make([]expression.Expression, 0, len(p.ByItems))
 	for _, item := range p.ByItems {
 		exprs = append(exprs, item.Expr)
+	}
+	if storeTp == kv.S3 {
+		return false
 	}
 	return expression.CanExprsPushDown(p.ctx.GetSessionVars().StmtCtx, exprs, p.ctx.GetClient(), storeTp)
 }
@@ -1415,7 +1440,7 @@ func CheckAggCanPushCop(sctx sessionctx.Context, aggFuncs []*aggregation.AggFunc
 			ret = false
 			break
 		}
-		if !aggregation.CheckAggPushDown(aggFunc, storeType) {
+		if !aggregation.CheckAggPushDown(sctx, aggFunc, storeType, groupByItems) {
 			reason = "AggFunc `" + aggFunc.Name + "` is not supported now"
 			ret = false
 			break
@@ -1689,7 +1714,9 @@ func (p *basePhysicalAgg) convertAvgForMPP() *PhysicalProjection {
 
 func (p *basePhysicalAgg) newPartialAggregate(copTaskType kv.StoreType, isMPPTask bool) (partial, final PhysicalPlan) {
 	// Check if this aggregation can push down.
+	//fmt.Println("exec newPartialAggregate")
 	if !CheckAggCanPushCop(p.ctx, p.AggFuncs, p.GroupByItems, copTaskType) {
+		fmt.Println("agg cannot push cop")
 		return nil, p.self
 	}
 	partialPref, finalPref, funcMap := BuildFinalModeAggregation(p.ctx, &AggInfo{
@@ -1713,7 +1740,66 @@ func (p *basePhysicalAgg) newPartialAggregate(copTaskType kv.StoreType, isMPPTas
 			return nil, p.self
 		}
 		partialPref.AggFuncs = append(partialPref.AggFuncs, aggFuncs...)
+	//} else if copTaskType == kv.S3 {
+		//fmt.Println("exec s3 partial agg funcs")
+		//for _, agg := range partialPref.AggFuncs {
+		//	var expr, idx string
+		//	fmt.Println("partial agg func is ", agg.Name, agg.Args, agg.Mode, agg.RetTp.String())
+		//	//fmt.Println("col is ", p.TP(), p.children, p.ctx, p.Schema(), p.OutputNames(), p.Stats(), p.ExplainNormalizedInfo())
+		//	if s, ok := agg.Args[0].(*expression.ScalarFunction); ok {
+		//		fmt.Println("s is ", s.FuncName, s.GetArgs())
+		//		switch s.FuncName.L {
+		//		case ast.Mul:
+		//			var right string
+		//			left := strings.Split(s.GetArgs()[0].String(), ".")[2]
+		//			if r, ok := s.GetArgs()[1].(*expression.ScalarFunction); ok {
+		//				var l, ri string
+		//				if r.FuncName.L == ast.Minus {
+		//					if rleft, ok := r.GetArgs()[0].(*expression.Constant); ok {
+		//						l = rleft.String()
+		//					}
+		//					if rright, ok := r.GetArgs()[1].(*expression.Column); ok {
+		//						ri = strings.Split(rright.OrigName, ".")[2]
+		//					}
+		//					right = fmt.Sprintf("(%v - %v)", l, ri)
+		//				}
+		//			} else {
+		//				right = strings.Split(s.GetArgs()[1].String(), ".")[2]
+		//			}
+		//
+		//			expr = fmt.Sprintf("%v(%v * %v)", agg.Name, left, right)
+		//			idx = strings.Split(s.GetArgs()[0].String(), ".")[0] + "." + strings.Split(s.GetArgs()[0].String(), ".")[1]
+		//		}
+		//	} else {
+		//		args := strings.Split(agg.Args[0].String(), ".")
+		//		if agg.Name == ast.AggFuncCount && len(args) == 1 {
+		//			idx = index
+		//			expr = fmt.Sprintf("COUNT(1)")
+		//		} else {
+		//			idx = args[0] + "." + args[1]
+		//			expr = agg.Name + "(" + args[2] + ")"
+		//		}
+		//
+		//	}
+		//	var s3info variable.S3QueryInfo
+		//	var ok bool
+		//	s3info ,ok = p.ctx.GetSessionVars().S3querys[idx]
+		//	if ok {
+		//		aggexpr := s3info.S3query["agg"]
+		//		if aggexpr != "" && !strings.Contains(aggexpr, expr) {
+		//			s3info.S3query["agg"] = aggexpr + ", " + expr
+		//		}
+		//		if aggexpr == "" {
+		//			s3info.S3query["agg"] = expr
+		//		}
+		//	}  else {
+		//		s3info = variable.S3QueryInfo{S3query: map[string]string{"agg": expr}}
+		//	}
+		//	p.ctx.GetSessionVars().S3querys[idx] = s3info
+		//	fmt.Println("s3info is ", s3info, " s3query is ", p.ctx.GetSessionVars().S3querys)
+		//}
 	}
+
 	p.AggFuncs = partialPref.AggFuncs
 	p.GroupByItems = partialPref.GroupByItems
 	p.schema = partialPref.Schema
@@ -2002,6 +2088,7 @@ func (p *PhysicalHashAgg) attach2Task(tasks ...task) task {
 	if cop, ok := t.(*copTask); ok {
 		if len(cop.rootTaskConds) == 0 {
 			copTaskType := cop.getStoreType()
+
 			partialAgg, finalAgg := p.newPartialAggregate(copTaskType, false)
 			if partialAgg != nil {
 				if cop.tablePlan != nil {
